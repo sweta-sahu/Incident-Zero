@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
+import asyncio
+
 
 @dataclass
 class Job:
@@ -18,6 +20,7 @@ class Job:
 class JobStore:
     def __init__(self) -> None:
         self._jobs: Dict[str, Job] = {}
+        self._subscribers: Dict[str, List[asyncio.Queue]] = {}
 
     def create_job(self, repo_path: Optional[str]) -> Job:
         job_id = f"job_{uuid4().hex[:8]}"
@@ -31,14 +34,31 @@ class JobStore:
         return self._jobs.get(job_id)
 
     def add_event(self, job: Job, stage: str, message: str, status: str) -> None:
-        job.timeline.append(
-            {
-                "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                "stage": stage,
-                "message": message,
-                "status": status,
-            }
-        )
+        event = {
+            "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "stage": stage,
+            "message": message,
+            "status": status,
+        }
+        job.timeline.append(event)
+        for queue in self._subscribers.get(job.job_id, []):
+            queue.put_nowait(event)
+
+    def subscribe(self, job_id: str) -> asyncio.Queue:
+        queue: asyncio.Queue = asyncio.Queue()
+        self._subscribers.setdefault(job_id, []).append(queue)
+        return queue
+
+    def unsubscribe(self, job_id: str, queue: asyncio.Queue) -> None:
+        queues = self._subscribers.get(job_id)
+        if not queues:
+            return
+        try:
+            queues.remove(queue)
+        except ValueError:
+            return
+        if not queues:
+            self._subscribers.pop(job_id, None)
 
 
 job_store = JobStore()
