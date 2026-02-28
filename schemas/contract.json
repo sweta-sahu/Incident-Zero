@@ -1,0 +1,60 @@
+﻿{
+  "finding": {
+    "id": "string",
+    "type": "hardcoded-secret|sql-injection",
+    "title": "string",
+    "severity": "low|medium|high|critical",
+    "confidence": "low|medium|high",
+    "description": "string",
+    "evidence": ["evidence"],
+    "file_path": "string",
+    "line": 0
+  },
+  "evidence": {
+    "id": "string",
+    "kind": "code|log|runtime|other",
+    "file_path": "string",
+    "line": 0,
+    "snippet": "string",
+    "note": "string"
+  },
+  "graph": {
+    "nodes": [
+      {"id": "string", "label": "string", "type": "entry|vuln|impact"}
+    ],
+    "edges": [
+      {"from": "string", "to": "string", "label": "string"}
+    ],
+    "top_paths": [
+      {"id": "string", "node_ids": ["string"], "score": 0}
+    ]
+  },
+  "patch": {
+    "id": "string",
+    "finding_id": "string",
+    "file_path": "string",
+    "diff": "string",
+    "summary": "string"
+  },
+  "timeline_event": {
+    "ts": "2026-02-28T16:00:00Z",
+    "stage": "ingest|scan|correlate|graph|patch|finalize",
+    "message": "string",
+    "status": "started|in_progress|done|error"
+  },
+  "tool_result": {
+    "tool": "codescan|runtimeprobe|patcher",
+    "findings": ["finding"],
+    "timeline": ["timeline_event"],
+    "meta": {"key": "value"}
+  },
+  "result_bundle": {
+    "job_id": "string",
+    "status": "queued|running|done|error",
+    "findings": ["finding"],
+    "graph": "graph",
+    "patches": ["patch"],
+    "timeline": ["timeline_event"],
+    "summary": "string"
+  }
+}

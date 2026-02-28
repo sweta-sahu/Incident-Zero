@@ -1,0 +1,18 @@
+﻿{
+  "job_id": "job_123",
+  "status": "running",
+  "timeline": [
+    {
+      "ts": "2026-02-28T16:00:00Z",
+      "stage": "ingest",
+      "message": "Repository received",
+      "status": "done"
+    },
+    {
+      "ts": "2026-02-28T16:00:10Z",
+      "stage": "scan",
+      "message": "CodeScan started",
+      "status": "in_progress"
+    }
+  ]
+}

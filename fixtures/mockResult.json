@@ -1,0 +1,72 @@
+﻿{
+  "job_id": "job_123",
+  "status": "done",
+  "findings": [
+    {
+      "id": "f_1",
+      "type": "hardcoded-secret",
+      "title": "Hardcoded API key",
+      "severity": "high",
+      "confidence": "high",
+      "description": "API key found in source code",
+      "evidence": ["e_1"],
+      "file_path": "src/config.js",
+      "line": 12
+    },
+    {
+      "id": "f_2",
+      "type": "sql-injection",
+      "title": "String concatenation in SQL query",
+      "severity": "high",
+      "confidence": "medium",
+      "description": "User input is concatenated into SQL",
+      "evidence": ["e_2"],
+      "file_path": "src/db.py",
+      "line": 48
+    }
+  ],
+  "graph": {
+    "nodes": [
+      {"id": "n_entry", "label": "Public Endpoint", "type": "entry"},
+      {"id": "n_v1", "label": "SQL Injection", "type": "vuln"},
+      {"id": "n_i1", "label": "DB Exfiltration", "type": "impact"}
+    ],
+    "edges": [
+      {"from": "n_entry", "to": "n_v1", "label": "input"},
+      {"from": "n_v1", "to": "n_i1", "label": "exploit"}
+    ],
+    "top_paths": [
+      {"id": "p1", "node_ids": ["n_entry", "n_v1", "n_i1"], "score": 90}
+    ]
+  },
+  "patches": [
+    {
+      "id": "p_1",
+      "finding_id": "f_1",
+      "file_path": "src/config.js",
+      "diff": "diff --git a/src/config.js b/src/config.js\n-const API_KEY = 'ABC';\n+const API_KEY = process.env.API_KEY;\n",
+      "summary": "Move API key to environment variable"
+    }
+  ],
+  "timeline": [
+    {
+      "ts": "2026-02-28T16:00:00Z",
+      "stage": "ingest",
+      "message": "Repository received",
+      "status": "done"
+    },
+    {
+      "ts": "2026-02-28T16:00:20Z",
+      "stage": "scan",
+      "message": "CodeScan completed",
+      "status": "done"
+    },
+    {
+      "ts": "2026-02-28T16:00:40Z",
+      "stage": "finalize",
+      "message": "Result bundle ready",
+      "status": "done"
+    }
+  ],
+  "summary": "Found 2 high-severity issues and generated 1 patch."
+}
