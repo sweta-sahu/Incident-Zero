@@ -100,6 +100,9 @@ def result(job_id: str) -> dict:
     job = job_store.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
+    if job.status != "done":
+        return {"job_id": job.job_id, "status": job.status, "timeline": job.timeline}
+    return job.result
     if job.status in {"done", "error"} and job.result:
         return job.result
     return {"job_id": job.job_id, "status": job.status, "timeline": job.timeline}
