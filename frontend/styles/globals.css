@@ -213,6 +213,18 @@ h1 {
   font-size: 18px;
 }
 
+.runtime-proof {
+  margin-left: auto;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid #3d4a28;
+  background: #243019;
+  color: #b8f481;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
 .pill {
   padding: 4px 10px;
   border-radius: 999px;
@@ -377,6 +389,51 @@ h1 {
 .evidence {
   display: grid;
   gap: 12px;
+}
+
+.evidence-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.evidence-panel h4 {
+  margin: 0;
+}
+
+.evidence-block {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  background: #0e1416;
+  display: grid;
+  gap: 10px;
+}
+
+.evidence-block h5 {
+  margin: 0;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.screenshot-preview {
+  margin: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.screenshot-preview img {
+  width: 100%;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  max-height: 260px;
+  object-fit: contain;
+  background: #0a0f11;
+}
+
+.screenshot-preview figcaption {
+  font-size: 12px;
 }
 
 .evidence-item pre {
