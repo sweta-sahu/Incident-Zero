@@ -5,11 +5,11 @@ from typing import Dict, List
 from backend.mcps.codescan.scanner import scan_repository
 
 from .correlator import correlate_tool_results
+from .graph import build_attack_graph
 from .store import job_store
 
 
 STUB_STAGES: List[Dict[str, str]] = [
-    {"stage": "graph", "message": "Attack graph built (stub)", "status": "done"},
     {"stage": "patch", "message": "Patch generation complete (stub)", "status": "done"},
     {"stage": "finalize", "message": "Result bundle ready", "status": "done"},
 ]
@@ -56,6 +56,14 @@ def run_job(job_id: str) -> None:
         status="done",
     )
 
+    graph = build_attack_graph(correlation["findings"])
+    job_store.add_event(
+        job,
+        stage="graph",
+        message="Attack graph built",
+        status="done",
+    )
+
     for event in STUB_STAGES:
         job_store.add_event(job, **event)
 
@@ -64,7 +72,7 @@ def run_job(job_id: str) -> None:
         "job_id": job.job_id,
         "status": job.status,
         "findings": correlation["findings"],
-        "graph": {"nodes": [], "edges": [], "top_paths": []},
+        "graph": graph,
         "patches": [],
         "timeline": job.timeline,
         "summary": correlation["summary"],
