@@ -74,7 +74,8 @@
     "graph": "graph",
     "patches": ["patch"],
     "timeline": ["timeline_event"],
-    "summary": "string"
+    "summary": "string",
+    "diagram": "mcp_tool_result"
   },
   "investigation_result": {
     "job_id": "string",

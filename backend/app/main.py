@@ -18,6 +18,7 @@ class AnalyzeRequest(BaseModel):
     repo_path: Optional[str] = None
     log_path: Optional[str] = None
     screenshot_path: Optional[str] = None
+    diagram_path: Optional[str] = None
 
 
 class AnalyzeResponse(BaseModel):
@@ -55,6 +56,7 @@ def analyze(req: AnalyzeRequest, background_tasks: BackgroundTasks) -> AnalyzeRe
         repo_path=req.repo_path,
         log_path=req.log_path,
         screenshot_path=req.screenshot_path,
+        diagram_path=req.diagram_path,
     )
     background_tasks.add_task(run_job, job.job_id)
     return AnalyzeResponse(job_id=job.job_id, status=job.status)

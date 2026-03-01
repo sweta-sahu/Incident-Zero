@@ -62,8 +62,28 @@ def run(image_path: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, 
     )
 
     if not result.get("ok"):
-        errors.append({"error": "vision_failed", "detail": result.get("error")})
-        return build_tool_result("DiagramExtractor", {}, [], {}, errors)
+        detail = str(result.get("error") or "")
+        # Fallback: tolerate partial JSON and fill defaults in normalization.
+        if "schema validation" in detail.lower():
+            fallback = call_vision(
+                model=DEFAULT_VISION_MODEL,
+                messages_with_image=messages,
+                json_schema=None,
+            )
+            if fallback.get("ok"):
+                result = fallback
+            else:
+                errors.append({"error": "vision_failed", "detail": detail})
+                errors.append(
+                    {
+                        "error": "vision_fallback_failed",
+                        "detail": fallback.get("error"),
+                    }
+                )
+                return build_tool_result("DiagramExtractor", {}, [], {}, errors)
+        else:
+            errors.append({"error": "vision_failed", "detail": detail})
+            return build_tool_result("DiagramExtractor", {}, [], {}, errors)
 
     artifacts = _normalize_artifacts(result.get("data", {}))
     artifacts["metadata"] = metadata

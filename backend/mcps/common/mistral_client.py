@@ -1,11 +1,12 @@
-﻿import os
+﻿import base64
 import json
 import logging
+import os
+import re
 import time
-import base64
 from typing import Any, Dict, List, Optional
 
-import requests
+from mistralai import Mistral
 
 
 logger = logging.getLogger(__name__)
@@ -13,8 +14,6 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT_SECONDS = 20
 DEFAULT_RETRIES = 2
-DEFAULT_BASE_URL = "https://api.mistral.ai/v1"
-DEFAULT_OCR_PATH = "/ocr"
 
 
 def call_text(
@@ -73,53 +72,37 @@ def call_ocr(
     retries: int = DEFAULT_RETRIES,
 ) -> Dict[str, Any]:
     """
-    Call Mistral OCR endpoint. Expects image_path on disk.
-
-    The endpoint can be overridden via MISTRAL_OCR_URL. If not provided,
-    it uses MISTRAL_API_BASE + /ocr.
+    Call Mistral OCR endpoint via the official SDK. Expects image_path on disk.
     """
     api_key = os.environ.get("MISTRAL_API_KEY", "").strip()
     if not api_key:
         return _safe_error("MISTRAL_API_KEY not set")
 
-    base_url = os.environ.get("MISTRAL_API_BASE", DEFAULT_BASE_URL).rstrip("/")
-    ocr_url = os.environ.get("MISTRAL_OCR_URL", f"{base_url}{DEFAULT_OCR_PATH}")
-
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
+    client = Mistral(api_key=api_key)
 
     last_error: Optional[str] = None
     for attempt in range(retries + 1):
         try:
-            # Read and encode image as base64
             with open(image_path, "rb") as handle:
                 image_data = base64.standard_b64encode(handle.read()).decode("utf-8")
-            
-            # Mistral OCR API expects 'document' field with base64 image
-            payload = {
-                "model": model,
-                "document": {
+
+            data_url = f"data:image/png;base64,{image_data}"
+            raw = client.ocr.process(
+                model=model,
+                document={
                     "type": "image_url",
-                    "image_url": f"data:image/png;base64,{image_data}",
+                    "image_url": {"url": data_url},
                 },
-            }
-            response = requests.post(
-                ocr_url, headers=headers, json=payload, timeout=timeout_seconds
             )
-            if response.status_code >= 400:
-                last_error = f"HTTP {response.status_code}: {response.text}"
-                logger.warning("Mistral OCR error: %s", last_error)
-            else:
-                raw = response.json()
-                text_blocks = _extract_ocr_text(raw)
-                return {
-                    "ok": True,
-                    "data": {"text_blocks": text_blocks, "raw": raw},
-                    "error": None,
-                    "raw": raw,
-                }
+
+            raw_dict = _to_dict(raw)
+            text_blocks = _extract_ocr_text(raw_dict)
+            return {
+                "ok": True,
+                "data": {"text_blocks": text_blocks, "raw": raw_dict},
+                "error": None,
+                "raw": raw_dict,
+            }
         except Exception as exc:
             last_error = str(exc)
             logger.warning("Mistral OCR request failed: %s", last_error)
@@ -141,43 +124,29 @@ def _call_chat(
     if not api_key:
         return _safe_error("MISTRAL_API_KEY not set")
 
-    base_url = os.environ.get("MISTRAL_API_BASE", DEFAULT_BASE_URL).rstrip("/")
-    url = f"{base_url}/chat/completions"
-
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-
-    payload: Dict[str, Any] = {
-        "model": model,
-        "messages": messages,
-        "temperature": 0.1,
-    }
-
-    logger.debug("Mistral request model=%s", model)
+    client = Mistral(api_key=api_key)
 
     last_error: Optional[str] = None
     for attempt in range(retries + 1):
         try:
-            response = requests.post(url, headers=headers, json=payload, timeout=timeout_seconds)
-            if response.status_code >= 400:
-                last_error = f"HTTP {response.status_code}: {response.text}"
-                logger.warning("Mistral error: %s", last_error)
-            else:
-                raw = response.json()
-                content = _extract_content(raw)
-                parsed = _parse_json(content)
-                if parsed is None:
-                    return _safe_error("Model response is not valid JSON", raw=raw)
-                if json_schema and not _validate_minimal_schema(parsed, json_schema):
-                    return _safe_error("Response failed minimal schema validation", raw=raw)
-                return {
-                    "ok": True,
-                    "data": parsed,
-                    "error": None,
-                    "raw": raw,
-                }
+            raw = client.chat.complete(
+                model=model,
+                messages=messages,
+            )
+
+            raw_dict = _to_dict(raw)
+            content = _extract_content(raw_dict)
+            parsed = _parse_json(content)
+            if parsed is None:
+                return _safe_error("Model response is not valid JSON", raw=raw_dict)
+            if json_schema and not _validate_minimal_schema(parsed, json_schema):
+                return _safe_error("Response failed minimal schema validation", raw=raw_dict)
+            return {
+                "ok": True,
+                "data": parsed,
+                "error": None,
+                "raw": raw_dict,
+            }
         except Exception as exc:
             last_error = str(exc)
             logger.warning("Mistral request failed: %s", last_error)
@@ -190,7 +159,19 @@ def _call_chat(
 
 def _extract_content(raw: Dict[str, Any]) -> str:
     try:
-        return raw["choices"][0]["message"]["content"]
+        content = raw["choices"][0]["message"]["content"]
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts: List[str] = []
+            for item in content:
+                if isinstance(item, str):
+                    parts.append(item)
+                    continue
+                if isinstance(item, dict) and isinstance(item.get("text"), str):
+                    parts.append(item["text"])
+            return "\n".join(parts)
+        return str(content)
     except Exception:
         return ""
 
@@ -211,6 +192,8 @@ def _extract_ocr_text(raw: Dict[str, Any]) -> List[str]:
     for page in pages:
         if isinstance(page, dict) and isinstance(page.get("text"), str):
             blocks.append(page["text"])
+        if isinstance(page, dict) and isinstance(page.get("markdown"), str):
+            blocks.append(page["markdown"])
         for block in page.get("blocks", []) if isinstance(page, dict) else []:
             if isinstance(block, dict) and isinstance(block.get("text"), str):
                 blocks.append(block["text"])
@@ -224,10 +207,67 @@ def _extract_ocr_text(raw: Dict[str, Any]) -> List[str]:
 def _parse_json(content: str) -> Optional[Dict[str, Any]]:
     if not content:
         return None
+
+    text = content.strip()
     try:
-        return json.loads(content)
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            return parsed
     except Exception:
+        pass
+
+    fenced_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if fenced_match:
+        try:
+            parsed = json.loads(fenced_match.group(1))
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            pass
+
+    candidate = _extract_first_json_object(text)
+    if candidate:
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            pass
+
+    return None
+
+
+def _extract_first_json_object(text: str) -> Optional[str]:
+    start = text.find("{")
+    if start < 0:
         return None
+
+    depth = 0
+    in_string = False
+    escape = False
+
+    for idx in range(start, len(text)):
+        ch = text[idx]
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+
+        if ch == '"':
+            in_string = True
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : idx + 1]
+
+    return None
 
 
 def _validate_minimal_schema(payload: Dict[str, Any], schema: Dict[str, Any]) -> bool:
@@ -245,3 +285,15 @@ def _safe_error(message: str, raw: Optional[Dict[str, Any]] = None) -> Dict[str,
         "error": message,
         "raw": raw,
     }
+
+
+def _to_dict(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if hasattr(value, "model_dump"):
+        return value.model_dump()
+    if hasattr(value, "model_dump_json"):
+        return json.loads(value.model_dump_json())
+    if hasattr(value, "__dict__"):
+        return dict(value.__dict__)
+    return {"raw": value}

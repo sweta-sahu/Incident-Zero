@@ -14,6 +14,7 @@ MAX_IMAGE_DIMENSION = 1600
 DEFAULT_OCR_MODEL = os.environ.get("MISTRAL_OCR_MODEL", "mistral-ocr-latest")
 DEFAULT_TEXT_MODEL = os.environ.get("MISTRAL_TEXT_MODEL", "mistral-large-latest")
 DEFAULT_VISION_MODEL = os.environ.get("MISTRAL_VISION_MODEL", "mistral-large-latest")
+VISION_FIRST = os.environ.get("MISTRAL_VISION_FIRST", "").strip() in {"1", "true", "TRUE", "yes", "YES"}
 
 
 def run(
@@ -52,6 +53,30 @@ def run(
 
     processed_path, metadata, prep_errors = _prepare_image(path)
     errors.extend(prep_errors)
+
+    if VISION_FIRST:
+        vision_result = _vision_extract(processed_path, context)
+        if vision_result.get("ok"):
+            artifacts = vision_result.get("data", {})
+            evidence = _build_vision_evidence(processed_path, artifacts)
+            signals = _signals_from_artifacts(artifacts)
+            artifacts["metadata"] = metadata
+            return build_tool_result(
+                tool_name="ScreenshotAnalyzer",
+                artifacts=artifacts,
+                evidence=evidence,
+                signals=signals,
+                errors=errors,
+            )
+
+        errors.append({"error": "vision_failed", "detail": vision_result.get("error")})
+        return build_tool_result(
+            tool_name="ScreenshotAnalyzer",
+            artifacts={"metadata": metadata},
+            evidence=[],
+            signals={},
+            errors=errors,
+        )
 
     ocr_result = call_ocr(image_path=str(processed_path), model=DEFAULT_OCR_MODEL)
     if not ocr_result.get("ok"):
@@ -302,8 +327,10 @@ def _extract_entities(text: str) -> Tuple[List[str], List[str], List[str]]:
     host_pattern = r"\b([a-zA-Z0-9.-]+\.(com|net|org|io|internal|local))\b"
     hosts = [match[0] for match in re.findall(host_pattern, text)]
 
-    endpoint_pattern = r"\b/[A-Za-z0-9_./-]+"
+    # Match only path starts (not inner segments like "/generate-report" inside "/api/generate-report")
+    endpoint_pattern = r"(?<![A-Za-z0-9_])/[A-Za-z0-9_\-/.]+"
     endpoints = re.findall(endpoint_pattern, text)
+    endpoints = _filter_endpoints(endpoints)
 
     return _dedupe(urls), _dedupe(hosts), _dedupe(endpoints)
 
@@ -317,6 +344,7 @@ def _extract_error_messages(text: str) -> List[str]:
 def _extract_error_codes(text: str) -> List[str]:
     codes = re.findall(r"\b[A-Z]{2,10}-\d{2,6}\b", text)
     codes += re.findall(r"\bERR_[A-Z0-9_]+\b", text)
+    codes += re.findall(r"\b[45]\d{2}\b", text)
     return _dedupe(codes)[:5]
 
 
@@ -336,6 +364,7 @@ def _detect_secrets(text: str) -> List[Dict[str, str]]:
         "aws_access_key": r"\bAKIA[0-9A-Z]{16}\b",
         "github_token": r"\bghp_[A-Za-z0-9]{36,}\b",
         "stripe_key": r"\b(sk_live|sk_test)_[A-Za-z0-9]{20,}\b",
+        "api_key": r"\bsk-[A-Za-z0-9]{8,}\b",
         "generic_token": r"\b[A-Za-z0-9_\-]{24,}\b",
     }
     findings = []
@@ -394,3 +423,14 @@ def _dedupe(items: List[str]) -> List[str]:
         seen.add(item)
         result.append(item)
     return result
+
+
+def _filter_endpoints(endpoints: List[str]) -> List[str]:
+    filtered = []
+    for ep in endpoints:
+        if ep.endswith((".py", ".js", ".ts")):
+            continue
+        if "API_URL" in ep or ep.startswith("/OPENAI"):
+            continue
+        filtered.append(ep)
+    return filtered

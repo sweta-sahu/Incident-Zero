@@ -15,6 +15,7 @@ class Job:
     repo_path: Optional[str]
     log_path: Optional[str]
     screenshot_path: Optional[str]
+    diagram_path: Optional[str]
     timeline: List[Dict[str, Any]] = field(default_factory=list)
     result: Dict[str, Any] = field(default_factory=dict)
 
@@ -29,6 +30,7 @@ class JobStore:
         repo_path: Optional[str],
         log_path: Optional[str] = None,
         screenshot_path: Optional[str] = None,
+        diagram_path: Optional[str] = None,
     ) -> Job:
         job_id = f"job_{uuid4().hex[:8]}"
         job = Job(
@@ -37,6 +39,7 @@ class JobStore:
             repo_path=repo_path,
             log_path=log_path,
             screenshot_path=screenshot_path,
+            diagram_path=diagram_path,
         )
         self._jobs[job_id] = job
         self.add_event(job, stage="ingest", message="Repository received", status="done")
