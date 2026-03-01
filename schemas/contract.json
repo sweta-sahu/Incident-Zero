@@ -7,12 +7,13 @@
     "confidence": "low|medium|high",
     "description": "string",
     "evidence": ["evidence"],
+    "signals": {"key": "value"},
     "file_path": "string",
     "line": 0
   },
   "evidence": {
     "id": "string",
-    "kind": "code|log|runtime|other",
+    "kind": "code|log|runtime|screenshot|ocr|image_text|other",
     "file_path": "string",
     "line": 0,
     "snippet": "string",
