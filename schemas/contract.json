@@ -32,7 +32,8 @@
   "graph_node": {
     "id": "string",
     "label": "string",
-    "type": "entry|vuln|impact"
+    "type": "entry|vuln|impact",
+    "finding_id": "string"
   },
   "graph_edge": {
     "from": "string",

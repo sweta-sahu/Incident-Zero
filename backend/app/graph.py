@@ -25,7 +25,8 @@ def build_attack_graph(findings: List[Dict]) -> Dict:
     impact_nodes: Dict[str, str] = {}
 
     for idx, finding in enumerate(findings, start=1):
-        vuln_id = f"v_{idx}"
+        finding_id = str(finding.get("id") or f"finding_{idx}")
+        vuln_id = f"vuln_{finding_id}"
         impact_label = _IMPACT_LABEL.get(
             finding.get("type", ""), "Security Impact"
         )
@@ -44,6 +45,7 @@ def build_attack_graph(findings: List[Dict]) -> Dict:
                     "id": vuln_id,
                     "label": finding.get("title") or finding.get("type", "Vuln"),
                     "type": "vuln",
+                    "finding_id": finding_id,
                 }
             )
             node_ids.add(vuln_id)
@@ -52,7 +54,7 @@ def build_attack_graph(findings: List[Dict]) -> Dict:
         edges.append({"from": vuln_id, "to": impact_id, "label": "exploit"})
 
         score = _SEVERITY_SCORE.get(finding.get("severity", "low"), 10)
-        path_id = f"p_{idx}"
+        path_id = f"path_{finding_id}"
         top_paths.append(
             {"id": path_id, "node_ids": [entry_id, vuln_id, impact_id], "score": score}
         )
