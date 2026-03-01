@@ -2,6 +2,7 @@
 import json
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from starlette.responses import StreamingResponse
 
@@ -19,6 +20,13 @@ class AnalyzeResponse(BaseModel):
 
 
 app = FastAPI(title="Incident Zero API")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.post("/analyze", response_model=AnalyzeResponse)
