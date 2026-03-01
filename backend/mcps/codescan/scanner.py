@@ -1,10 +1,10 @@
-"""
+﻿"""
 Main scanning logic for CodeScan MCP.
 Orchestrates rule application across repository files.
 """
 
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 import logging
@@ -18,32 +18,32 @@ logger = logging.getLogger(__name__)
 
 class ScanResult:
     """Encapsulates scan results with metadata."""
-    
+
     def __init__(self, repo_path: str):
         self.repo_path = Path(repo_path).resolve()
         self.findings: List[Dict[str, Any]] = []
         self.scanned_files = 0
         self.skipped_files = 0
         self.errors = []
-        self.start_time = datetime.now()
+        self.start_time = datetime.now(timezone.utc)
         self.end_time: Optional[datetime] = None
-    
+
     def add_finding(self, finding: Dict[str, Any]) -> None:
         """Add a finding to results."""
         self.findings.append(finding)
-    
+
     def add_error(self, file_path: str, error: str) -> None:
         """Log a scanning error."""
         self.errors.append({
             "file": file_path,
             "error": str(error)
         })
-    
+
     def finalize(self) -> Dict[str, Any]:
         """Generate final ToolResult JSON."""
-        self.end_time = datetime.now()
+        self.end_time = datetime.now(timezone.utc)
         duration = (self.end_time - self.start_time).total_seconds()
-        
+
         # Sort findings by severity (high → medium → low)
         severity_order = {"high": 0, "medium": 1, "low": 2}
         self.findings.sort(
@@ -52,13 +52,21 @@ class ScanResult:
                 -f.get("confidence_score", 0)
             )
         )
-        
+
+        timeline_event = {
+            "ts": self.end_time.isoformat().replace("+00:00", "Z"),
+            "stage": "scan",
+            "message": "CodeScan completed",
+            "status": "done",
+        }
+
         return {
             "tool": "codescan",
             "tool_name": "CodeScan",
-            "timestamp": datetime.now().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "status": "completed",
             "findings": self.findings,
+            "timeline": [timeline_event],
             "meta": {
                 "repo_path": str(self.repo_path),
                 "total_findings": len(self.findings),
@@ -78,7 +86,7 @@ class ScanResult:
             },
             "errors": self.errors if self.errors else None
         }
-    
+
     def _count_by_severity(self) -> Dict[str, int]:
         """Count findings by severity level."""
         counts = {"high": 0, "medium": 0, "low": 0}
@@ -87,7 +95,7 @@ class ScanResult:
             if severity in counts:
                 counts[severity] += 1
         return counts
-    
+
     def _count_by_type(self) -> Dict[str, int]:
         """Count findings by vulnerability type."""
         counts = {}
@@ -101,20 +109,20 @@ def scan_repository(repo_path: str) -> Dict[str, Any]:
     """
     Scan a repository for vulnerabilities using registered rules.
     Main entry point for CodeScan MCP.
-    
+
     Args:
         repo_path: Root directory of the repository to scan
-        
+
     Returns:
         ToolResult JSON with findings and metadata
     """
     result = ScanResult(repo_path)
-    
+
     # Validate repo path
     if not Path(repo_path).exists():
         result.add_error(repo_path, "Repository path does not exist")
         return result.finalize()
-    
+
     # Directories to skip during traversal
     skip_dirs = {
         ".git", "node_modules", ".venv", "venv", "env",
@@ -122,37 +130,37 @@ def scan_repository(repo_path: str) -> Dict[str, Any]:
         ".pytest_cache", ".tox", ".mypy_cache", ".hypothesis",
         "egg-info", ".eggs", "vendor", "migrations"
     }
-    
+
     # File extensions to scan
     scannable_extensions = {
         ".py", ".js", ".ts", ".jsx", ".tsx",
         ".java", ".go", ".rb", ".php", ".cs", ".cpp", ".c"
     }
-    
+
     # Walk through repository
     for root, dirs, files in os.walk(result.repo_path):
         # Prevent traverse into skip directories
         dirs[:] = [d for d in dirs if d not in skip_dirs]
-        
+
         for file in files:
             file_path = Path(root) / file
             relative_path = file_path.relative_to(result.repo_path)
-            
+
             # Check if file should be scanned
             if file_path.suffix not in scannable_extensions:
                 continue
-            
+
             result.scanned_files += 1
-            
+
             try:
                 # Read file content
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                     content = f.read()
-                
+
                 # Apply each rule to this file
                 for rule in VULNERABILITY_RULES:
                     matches = rule.check(content, str(file_path))
-                    
+
                     for match in matches:
                         confidence_score = match.get("confidence", rule.confidence)
                         finding_id = f"{rule.rule_id}_{len(result.findings)}"
@@ -164,7 +172,7 @@ def scan_repository(repo_path: str) -> Dict[str, Any]:
                             content=content,
                             finding_id=finding_id,
                         )
-                        
+
                         # Build finding object
                         finding = {
                             "id": finding_id,
@@ -189,13 +197,13 @@ def scan_repository(repo_path: str) -> Dict[str, Any]:
                             "remediation_hint": _get_remediation_hint(rule.vulnerability_type),
                             "cwe_id": _get_cwe_id(rule.vulnerability_type)
                         }
-                        
+
                         result.add_finding(finding)
-            
+
             except Exception as e:
                 result.add_error(str(file_path), str(e))
                 logger.debug(f"Error scanning {file_path}: {e}")
-    
+
     return result.finalize()
 
 
