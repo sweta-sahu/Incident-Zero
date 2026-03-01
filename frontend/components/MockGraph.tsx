@@ -46,7 +46,7 @@ export default function MockGraph({
       <div className="graph-edges muted">
         {graph.edges.map((edge, idx) => (
           <div key={`${edge.from}-${edge.to}-${idx}`}>
-            {edge.from} -> {edge.to} ({edge.label})
+            {edge.from} {"->"} {edge.to} ({edge.label})
           </div>
         ))}
       </div>

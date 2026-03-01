@@ -11,6 +11,7 @@ pytest-asyncio==0.21.1
 # Development & Utilities
 python-dotenv==1.0.0
 requests==2.31.0
+python-multipart==0.0.9
 
 # Code Analysis & Security (Optional, for future enhancements)
 # bandit==1.7.5  # Additional security scanning

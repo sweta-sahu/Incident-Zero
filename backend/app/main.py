@@ -2,10 +2,13 @@
 import json
 import mimetypes
 import os
+import shutil
+import tempfile
 from pathlib import Path
 from typing import Optional
+from uuid import uuid4
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from starlette.responses import FileResponse, StreamingResponse
@@ -18,6 +21,7 @@ class AnalyzeRequest(BaseModel):
     repo_path: Optional[str] = None
     log_path: Optional[str] = None
     screenshot_path: Optional[str] = None
+    diagram_path: Optional[str] = None
 
 
 class AnalyzeResponse(BaseModel):
@@ -41,6 +45,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+UPLOAD_DIR = Path(
+    os.environ.get(
+        "INCIDENT_ZERO_UPLOAD_DIR",
+        str(Path(tempfile.gettempdir()) / "incident-zero-uploads"),
+    )
+)
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
 
 @app.post("/analyze", response_model=AnalyzeResponse)
 def analyze(req: AnalyzeRequest, background_tasks: BackgroundTasks) -> AnalyzeResponse:
@@ -48,6 +60,44 @@ def analyze(req: AnalyzeRequest, background_tasks: BackgroundTasks) -> AnalyzeRe
         repo_path=req.repo_path,
         log_path=req.log_path,
         screenshot_path=req.screenshot_path,
+        diagram_path=req.diagram_path,
+    )
+    background_tasks.add_task(run_job, job.job_id)
+    return AnalyzeResponse(job_id=job.job_id, status=job.status)
+
+
+@app.post("/analyze/upload", response_model=AnalyzeResponse)
+def analyze_upload(
+    background_tasks: BackgroundTasks,
+    repo_path: Optional[str] = Form(None),
+    log_path: Optional[str] = Form(None),
+    screenshot_path: Optional[str] = Form(None),
+    diagram_path: Optional[str] = Form(None),
+    log_file: Optional[UploadFile] = File(None),
+    screenshot_file: Optional[UploadFile] = File(None),
+    diagram_file: Optional[UploadFile] = File(None),
+) -> AnalyzeResponse:
+    resolved_log_path = _resolve_evidence_path(
+        explicit_path=log_path,
+        upload=log_file,
+        prefix="log",
+    )
+    resolved_screenshot_path = _resolve_evidence_path(
+        explicit_path=screenshot_path,
+        upload=screenshot_file,
+        prefix="screenshot",
+    )
+    resolved_diagram_path = _resolve_evidence_path(
+        explicit_path=diagram_path,
+        upload=diagram_file,
+        prefix="diagram",
+    )
+
+    job = job_store.create_job(
+        repo_path=repo_path,
+        log_path=resolved_log_path,
+        screenshot_path=resolved_screenshot_path,
+        diagram_path=resolved_diagram_path,
     )
     background_tasks.add_task(run_job, job.job_id)
     return AnalyzeResponse(job_id=job.job_id, status=job.status)
@@ -72,7 +122,7 @@ async def events(job_id: str, request: Request) -> StreamingResponse:
     async def stream():
         try:
             for event in job.timeline:
-                yield f"data: {json.dumps(event)}\n\n"
+                yield f"data: {json.dumps(event)}\\n\\n"
 
             while True:
                 if await request.is_disconnected():
@@ -81,7 +131,7 @@ async def events(job_id: str, request: Request) -> StreamingResponse:
                     event = await asyncio.wait_for(queue.get(), timeout=1.0)
                 except asyncio.TimeoutError:
                     continue
-                yield f"data: {json.dumps(event)}\n\n"
+                yield f"data: {json.dumps(event)}\\n\\n"
         finally:
             job_store.unsubscribe(job_id, queue)
 
@@ -124,3 +174,28 @@ def evidence_file(job_id: str, evidence_id: str) -> FileResponse:
             return FileResponse(path=path, media_type=media_type, filename=path.name)
 
     raise HTTPException(status_code=404, detail="evidence not found or not previewable")
+
+
+def _resolve_evidence_path(
+    explicit_path: Optional[str],
+    upload: Optional[UploadFile],
+    prefix: str,
+) -> Optional[str]:
+    clean_path = str(explicit_path or "").strip()
+    if clean_path:
+        return clean_path
+    if upload is None:
+        return None
+    return _persist_upload(upload, prefix=prefix)
+
+
+def _persist_upload(upload: UploadFile, prefix: str) -> str:
+    original_name = Path(upload.filename or f"{prefix}.bin").name
+    suffix = Path(original_name).suffix
+    saved_name = f"{prefix}_{uuid4().hex}{suffix}"
+    saved_path = UPLOAD_DIR / saved_name
+
+    with saved_path.open("wb") as handle:
+        shutil.copyfileobj(upload.file, handle)
+
+    return str(saved_path)
