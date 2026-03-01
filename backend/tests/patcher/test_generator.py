@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from mcps.patcher.generator import generate_patches
+from backend.mcps.patcher.generator import generate_patches
 
 
 def test_generate_hardcoded_secret_patch_python(temp_repo):
