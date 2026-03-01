@@ -30,6 +30,7 @@ type Finding = {
   file_path: string;
   line: number;
   evidence: Evidence[];
+  signals?: Record<string, unknown>;
 };
 
 type GraphNode = {
@@ -53,6 +54,15 @@ type Patch = {
 };
 
 const defaultGraph: Graph = { nodes: [], edges: [] };
+
+function hasRuntimeProof(finding: Finding): boolean {
+  if (Boolean(finding.signals?.runtime_proof)) {
+    return true;
+  }
+  return (finding.evidence || []).some(
+    (evidence) => evidence.kind === "runtime" || evidence.kind === "log"
+  );
+}
 
 export default function Run() {
   const { query } = useRouter();
@@ -120,6 +130,30 @@ export default function Run() {
       return true;
     });
   }, [findings, severityFilter, typeFilter]);
+
+  const selectedLogEvidence = useMemo(() => {
+    if (!selectedFinding) return [];
+    return (selectedFinding.evidence || []).filter(
+      (evidence) => evidence.kind === "log" || evidence.kind === "runtime"
+    );
+  }, [selectedFinding]);
+
+  const selectedScreenshotEvidence = useMemo(() => {
+    if (!selectedFinding) return [];
+    return (selectedFinding.evidence || []).filter(
+      (evidence) => evidence.kind === "screenshot"
+    );
+  }, [selectedFinding]);
+
+  const selectedOtherEvidence = useMemo(() => {
+    if (!selectedFinding) return [];
+    return (selectedFinding.evidence || []).filter(
+      (evidence) =>
+        evidence.kind !== "log" &&
+        evidence.kind !== "runtime" &&
+        evidence.kind !== "screenshot"
+    );
+  }, [selectedFinding]);
 
   const summary = useMemo(() => {
     const counts = { critical: 0, high: 0, medium: 0, low: 0 };
@@ -244,6 +278,9 @@ export default function Run() {
                     {finding.severity}
                   </span>
                   <h3>{finding.title}</h3>
+                  {hasRuntimeProof(finding) && (
+                    <span className="runtime-proof">Runtime proof</span>
+                  )}
                 </header>
                 <p className="muted">{finding.description}</p>
                 <p className="meta">
@@ -275,6 +312,9 @@ export default function Run() {
                 {selectedFinding.severity}
               </span>
               <h3>{selectedFinding.title}</h3>
+              {hasRuntimeProof(selectedFinding) && (
+                <span className="runtime-proof">Runtime proof</span>
+              )}
             </div>
             <button
               className="secondary"
@@ -288,9 +328,50 @@ export default function Run() {
             {selectedFinding.file_path}:{selectedFinding.line} •{" "}
             {selectedFinding.type}
           </p>
+          <div className="evidence-panel">
+            <h4>Evidence Panel</h4>
+            <div className="evidence-block">
+              <h5>Log snippet</h5>
+              {selectedLogEvidence.length ? (
+                selectedLogEvidence.map((ev) => (
+                  <div key={ev.id} className="evidence-item">
+                    <p className="muted">{ev.note || "Runtime log proof"}</p>
+                    <pre>{ev.snippet}</pre>
+                  </div>
+                ))
+              ) : (
+                <p className="muted">No runtime log snippets attached.</p>
+              )}
+            </div>
+            <div className="evidence-block">
+              <h5>Screenshot preview</h5>
+              {selectedScreenshotEvidence.length ? (
+                selectedScreenshotEvidence.map((ev) => (
+                  <figure key={ev.id} className="screenshot-preview">
+                    {jobId ? (
+                      <img
+                        src={`${apiBase}/evidence/${encodeURIComponent(
+                          String(jobId)
+                        )}/${encodeURIComponent(ev.id)}`}
+                        alt="Screenshot evidence"
+                      />
+                    ) : (
+                      <p className="muted">Preview unavailable.</p>
+                    )}
+                    <figcaption className="muted">
+                      {ev.note || ev.file_path}
+                    </figcaption>
+                    {ev.snippet && <pre>{ev.snippet}</pre>}
+                  </figure>
+                ))
+              ) : (
+                <p className="muted">No screenshot evidence attached.</p>
+              )}
+            </div>
+          </div>
           <div className="evidence">
-            {selectedFinding.evidence?.length ? (
-              selectedFinding.evidence.map((ev) => (
+            {selectedOtherEvidence.length ? (
+              selectedOtherEvidence.map((ev) => (
                 <div key={ev.id} className="evidence-item">
                   <strong>{ev.kind}</strong>
                   <p className="muted">{ev.note}</p>
@@ -298,7 +379,7 @@ export default function Run() {
                 </div>
               ))
             ) : (
-              <p className="muted">No evidence snippets available.</p>
+              <p className="muted">No additional evidence snippets available.</p>
             )}
           </div>
         </aside>

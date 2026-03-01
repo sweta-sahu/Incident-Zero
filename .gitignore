@@ -1,0 +1,10 @@
+backend/.env
+.pytest_cache/
+backend/__pycache__/
+backend/app/__pycache__/
+backend/tests/__pycache__/
+backend/mcps/codescan/__pycache__/
+backend/mcps/common/__pycache__/
+backend/mcps/log_reasoner/__pycache__/
+backend/mcps/patcher/__pycache__/
+backend/mcps/screenshot_analyzer/__pycache__/

@@ -13,6 +13,8 @@ class Job:
     job_id: str
     status: str
     repo_path: Optional[str]
+    log_path: Optional[str]
+    screenshot_path: Optional[str]
     timeline: List[Dict[str, Any]] = field(default_factory=list)
     result: Dict[str, Any] = field(default_factory=dict)
 
@@ -22,9 +24,20 @@ class JobStore:
         self._jobs: Dict[str, Job] = {}
         self._subscribers: Dict[str, List[asyncio.Queue]] = {}
 
-    def create_job(self, repo_path: Optional[str]) -> Job:
+    def create_job(
+        self,
+        repo_path: Optional[str],
+        log_path: Optional[str] = None,
+        screenshot_path: Optional[str] = None,
+    ) -> Job:
         job_id = f"job_{uuid4().hex[:8]}"
-        job = Job(job_id=job_id, status="running", repo_path=repo_path)
+        job = Job(
+            job_id=job_id,
+            status="running",
+            repo_path=repo_path,
+            log_path=log_path,
+            screenshot_path=screenshot_path,
+        )
         self._jobs[job_id] = job
         self.add_event(job, stage="ingest", message="Repository received", status="done")
         self.add_event(job, stage="scan", message="CodeScan started", status="in_progress")

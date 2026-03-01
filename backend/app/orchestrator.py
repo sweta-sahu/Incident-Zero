@@ -1,9 +1,11 @@
 ﻿from __future__ import annotations
 
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from backend.mcps.codescan.scanner import scan_repository
+from backend.mcps.log_reasoner.run import run as run_log_reasoner
 from backend.mcps.patcher.generator import generate_patches
+from backend.mcps.screenshot_analyzer.run import run as run_screenshot_analyzer
 
 from .correlator import correlate_tool_results
 from .graph import build_attack_graph
@@ -48,7 +50,43 @@ def run_job(job_id: str) -> None:
         status="done",
     )
 
-    correlation = correlate_tool_results([tool_result])
+    job_store.add_event(
+        job,
+        stage="correlate",
+        message="Correlation started",
+        status="in_progress",
+    )
+
+    tool_results: List[Dict[str, Any]] = [tool_result]
+
+    if job.log_path:
+        log_result = run_log_reasoner(job.log_path, context={"repo_path": job.repo_path})
+        tool_results.append(log_result)
+        job_store.add_event(
+            job,
+            stage="correlate",
+            message=_multimodal_event_message(
+                "Log parser MCP completed", log_result.get("errors")
+            ),
+            status="done",
+        )
+
+    if job.screenshot_path:
+        screenshot_result = run_screenshot_analyzer(
+            job.screenshot_path,
+            context={"repo_path": job.repo_path},
+        )
+        tool_results.append(screenshot_result)
+        job_store.add_event(
+            job,
+            stage="correlate",
+            message=_multimodal_event_message(
+                "Screenshot analyzer MCP completed", screenshot_result.get("errors")
+            ),
+            status="done",
+        )
+
+    correlation = correlate_tool_results(tool_results)
     job_store.add_event(
         job,
         stage="correlate",
@@ -86,3 +124,10 @@ def run_job(job_id: str) -> None:
         "timeline": job.timeline,
         "summary": correlation["summary"],
     }
+
+
+def _multimodal_event_message(base: str, errors: Any) -> str:
+    error_count = len(errors or [])
+    if error_count == 0:
+        return base
+    return f"{base} with {error_count} issue(s)"
