@@ -72,6 +72,14 @@ h1 {
   font-weight: 600;
 }
 
+.secondary {
+  border: 1px solid var(--border);
+  padding: 10px 18px;
+  border-radius: 999px;
+  font-weight: 600;
+  color: var(--text);
+}
+
 .ghost {
   color: var(--muted);
   font-size: 14px;
@@ -104,6 +112,157 @@ h1 {
   margin: 0;
   color: var(--muted);
   line-height: 1.5;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.timeline {
+  list-style: none;
+  padding: 0;
+  margin: 16px 0 0 0;
+  display: grid;
+  gap: 12px;
+}
+
+.timeline li {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 16px;
+  align-items: center;
+  background: #12181b;
+  border-radius: 12px;
+  padding: 12px 16px;
+}
+
+.badge {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 11px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: #243036;
+  color: var(--text);
+  text-align: center;
+}
+
+.badge.done {
+  background: #1d3c33;
+  color: #8ff2cd;
+}
+
+.badge.in_progress {
+  background: #2a2b31;
+  color: #f5b24a;
+}
+
+.badge.error {
+  background: #3a1f24;
+  color: #ff9aa2;
+}
+
+.findings {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.finding {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 16px;
+  background: #12181b;
+}
+
+.finding header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.finding h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.pill {
+  padding: 4px 10px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+
+.pill.high {
+  background: #3a1f24;
+  color: #ff9aa2;
+}
+
+.pill.medium {
+  background: #3b3320;
+  color: #f5d27a;
+}
+
+.pill.low {
+  background: #1d3c33;
+  color: #8ff2cd;
+}
+
+.meta {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.graph {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.graph-nodes {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.node {
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: #12181b;
+}
+
+.node.entry {
+  border-color: #4bc3ff;
+}
+
+.node.vuln {
+  border-color: #f5b24a;
+}
+
+.node.impact {
+  border-color: #ff8c8c;
+}
+
+.form {
+  display: grid;
+  gap: 16px;
+}
+
+.field {
+  display: grid;
+  gap: 8px;
+  color: var(--muted);
+}
+
+.field input {
+  background: #0e1416;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  color: var(--text);
 }
 
 @media (max-width: 720px) {

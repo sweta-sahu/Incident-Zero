@@ -8,7 +8,8 @@
           Upload a repo, watch the timeline, and receive a patch-ready report.
         </p>
         <div className="actions">
-          <a className="primary" href="/run/demo">Run Demo</a>
+          <a className="primary" href="/upload">Upload Repo</a>
+          <a className="secondary" href="/run/demo">Run Demo</a>
           <span className="ghost">/run/[jobId]</span>
         </div>
       </header>
