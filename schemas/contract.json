@@ -29,6 +29,16 @@
       {"id": "string", "node_ids": ["string"], "score": 0}
     ]
   },
+  "graph_node": {
+    "id": "string",
+    "label": "string",
+    "type": "entry|vuln|impact"
+  },
+  "graph_edge": {
+    "from": "string",
+    "to": "string",
+    "label": "string"
+  },
   "patch": {
     "id": "string",
     "finding_id": "string",
@@ -49,6 +59,15 @@
     "meta": {"key": "value"}
   },
   "result_bundle": {
+    "job_id": "string",
+    "status": "queued|running|done|error",
+    "findings": ["finding"],
+    "graph": "graph",
+    "patches": ["patch"],
+    "timeline": ["timeline_event"],
+    "summary": "string"
+  },
+  "investigation_result": {
     "job_id": "string",
     "status": "queued|running|done|error",
     "findings": ["finding"],
