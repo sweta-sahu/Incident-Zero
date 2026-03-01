@@ -152,6 +152,7 @@ def run_job(job_id: str) -> None:
             "findings": correlation["findings"],
             "graph": graph,
             "patches": patch_result.get("patches", []),
+            "manual_fix_recommendations": patch_result.get("manual_fix_recommendations", []),
             "timeline": job.timeline,
             "summary": correlation["summary"],
             "diagram": diagram_result,
@@ -183,6 +184,7 @@ def _mark_job_error(job: Job, stage: str, message: str) -> None:
         "findings": [],
         "graph": {"nodes": [], "edges": [], "top_paths": []},
         "patches": [],
+        "manual_fix_recommendations": [],
         "timeline": job.timeline,
         "summary": message,
     }

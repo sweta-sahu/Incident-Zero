@@ -26,6 +26,7 @@ def generate_patches(
     """
     repo_root = Path(repo_path).resolve()
     patches: List[Dict[str, Any]] = []
+    manual_fix_recommendations: List[Dict[str, Any]] = []
     skipped: List[Dict[str, Any]] = []
     errors: List[Dict[str, Any]] = []
 
@@ -38,18 +39,31 @@ def generate_patches(
 
         file_path = str(finding.get("file_path") or "").strip()
         if not file_path:
-            skipped.append({"finding_id": finding_id, "reason": "missing_file_path"})
+            reason = "missing_file_path"
+            skipped.append({"finding_id": finding_id, "reason": reason})
+            manual_fix_recommendations.append(
+                _build_manual_fix_recommendation(finding, finding_id, vuln_type, reason)
+            )
             continue
 
         line_number = _as_positive_int(finding.get("line") or finding.get("line_number"))
         if line_number <= 0:
-            skipped.append({"finding_id": finding_id, "reason": "invalid_line_number"})
+            reason = "invalid_line_number"
+            skipped.append({"finding_id": finding_id, "reason": reason})
+            manual_fix_recommendations.append(
+                _build_manual_fix_recommendation(finding, finding_id, vuln_type, reason)
+            )
             continue
 
-        absolute_path = repo_root / file_path
-        if not absolute_path.exists():
-            skipped.append({"finding_id": finding_id, "reason": "file_not_found"})
+        resolved = _resolve_file_in_repo(repo_root, file_path)
+        if resolved is None:
+            reason = "file_not_found"
+            skipped.append({"finding_id": finding_id, "reason": reason})
+            manual_fix_recommendations.append(
+                _build_manual_fix_recommendation(finding, finding_id, vuln_type, reason)
+            )
             continue
+        absolute_path, relative_file_path = resolved
 
         try:
             original_text = absolute_path.read_text(encoding="utf-8", errors="ignore")
@@ -63,12 +77,20 @@ def generate_patches(
             )
 
             if patched_lines is None or patched_lines == original_lines:
-                skipped.append({"finding_id": finding_id, "reason": "template_not_applicable"})
+                reason = "template_not_applicable"
+                skipped.append({"finding_id": finding_id, "reason": reason})
+                manual_fix_recommendations.append(
+                    _build_manual_fix_recommendation(finding, finding_id, vuln_type, reason)
+                )
                 continue
 
-            diff_text = _build_unified_diff(file_path, original_lines, patched_lines)
+            diff_text = _build_unified_diff(relative_file_path, original_lines, patched_lines)
             if not diff_text.strip():
-                skipped.append({"finding_id": finding_id, "reason": "empty_diff"})
+                reason = "empty_diff"
+                skipped.append({"finding_id": finding_id, "reason": reason})
+                manual_fix_recommendations.append(
+                    _build_manual_fix_recommendation(finding, finding_id, vuln_type, reason)
+                )
                 continue
 
             patch_id = f"patch_{finding_id}"
@@ -76,16 +98,27 @@ def generate_patches(
                 {
                     "id": patch_id,
                     "finding_id": finding_id,
-                    "file_path": file_path,
+                    "file_path": relative_file_path,
                     "diff": diff_text,
                     "summary": summary,
                     "template_id": template_id,
                     "vulnerability_type": vuln_type,
                     "line": line_number,
+                    "source": _extract_patch_source(finding),
                 }
             )
         except Exception as exc:
+            reason = "patch_generation_error"
             errors.append({"finding_id": finding_id, "error": str(exc)})
+            manual_fix_recommendations.append(
+                _build_manual_fix_recommendation(
+                    finding,
+                    finding_id,
+                    vuln_type,
+                    reason,
+                    detail=str(exc),
+                )
+            )
 
     github_bundle = build_pr_automation_bundle(patches, github_config=github_config)
 
@@ -95,11 +128,13 @@ def generate_patches(
         "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "status": "completed",
         "patches": patches,
+        "manual_fix_recommendations": manual_fix_recommendations,
         "github": github_bundle,
         "meta": {
             "repo_path": str(repo_root),
             "input_findings": len(findings or []),
             "generated_patches": len(patches),
+            "manual_fix_recommendations": len(manual_fix_recommendations),
             "skipped_findings": len(skipped),
             "errors": len(errors),
             "supported_types": sorted(_SUPPORTED_TYPES),
@@ -320,4 +355,94 @@ def _python_import_insertion_index(lines: List[str]) -> int:
     while idx < len(lines) and (not lines[idx].strip() or lines[idx].lstrip().startswith("#")):
         idx += 1
     return idx
+
+
+def _resolve_file_in_repo(repo_root: Path, file_path: str) -> Optional[Tuple[Path, str]]:
+    raw = str(file_path or "").strip().replace("\\", "/")
+    if not raw:
+        return None
+
+    candidate = (repo_root / raw.lstrip("/")).resolve()
+    if candidate.exists() and candidate.is_file():
+        rel = str(candidate.relative_to(repo_root)).replace("\\", "/")
+        return candidate, rel
+
+    name = Path(raw).name
+    if not name:
+        return None
+
+    try:
+        for match in repo_root.rglob(name):
+            if not match.is_file():
+                continue
+            rel = str(match.relative_to(repo_root)).replace("\\", "/")
+            if raw.endswith(rel) or rel.endswith(raw.lstrip("/")):
+                return match, rel
+        for match in repo_root.rglob(name):
+            if match.is_file():
+                rel = str(match.relative_to(repo_root)).replace("\\", "/")
+                return match, rel
+    except OSError:
+        return None
+
+    return None
+
+
+def _build_manual_fix_recommendation(
+    finding: Dict[str, Any],
+    finding_id: str,
+    vuln_type: str,
+    reason: str,
+    detail: str = "",
+) -> Dict[str, Any]:
+    recommendation = {
+        "id": f"manual_fix_{finding_id}",
+        "finding_id": finding_id,
+        "vulnerability_type": vuln_type,
+        "reason": reason,
+        "file_path": str(finding.get("file_path") or ""),
+        "line": _as_positive_int(finding.get("line") or finding.get("line_number")),
+        "manual_fix_recommendation": _manual_steps(vuln_type),
+        "source": _extract_patch_source(finding),
+    }
+    if detail:
+        recommendation["detail"] = detail
+    return recommendation
+
+
+def _manual_steps(vuln_type: str) -> List[str]:
+    if vuln_type == "hardcoded-secret":
+        return [
+            "Replace hardcoded secret with environment/secret manager lookup.",
+            "Rotate any exposed credential and revoke the old key.",
+            "Add a test/lint rule to block hardcoded secrets.",
+        ]
+    if vuln_type == "sql-injection":
+        return [
+            "Use parameterized queries instead of string concatenation.",
+            "Validate and constrain user-controlled query inputs.",
+            "Add regression test with SQLi payloads.",
+        ]
+    return [
+        "Review evidence to identify exact vulnerable code path.",
+        "Apply secure coding controls and add regression coverage.",
+    ]
+
+
+def _extract_patch_source(finding: Dict[str, Any]) -> List[str]:
+    raw = finding.get("source")
+    if isinstance(raw, str):
+        cleaned = raw.strip().lower()
+        return [cleaned] if cleaned else ["code"]
+    if isinstance(raw, list):
+        sources: List[str] = []
+        for item in raw:
+            if not isinstance(item, str):
+                continue
+            cleaned = item.strip().lower()
+            if cleaned and cleaned not in sources:
+                sources.append(cleaned)
+        if sources:
+            return sources
+    return ["code"]
 
