@@ -8,6 +8,7 @@ from backend.mcps.common.types import build_tool_result
 
 
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
+MAX_IMAGE_DIMENSION = 1800
 DEFAULT_VISION_MODEL = "mistral-large-latest"
 
 
@@ -24,8 +25,11 @@ def run(image_path: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, 
         errors.append({"error": "image_too_large", "max_bytes": MAX_IMAGE_BYTES})
         return build_tool_result("DiagramExtractor", {}, [], {}, errors)
 
-    mime_type = mimetypes.guess_type(path.name)[0] or "image/png"
-    image_b64 = base64.b64encode(path.read_bytes()).decode("ascii")
+    processed_path, metadata, prep_errors = _prepare_image(path)
+    errors.extend(prep_errors)
+
+    mime_type = mimetypes.guess_type(processed_path.name)[0] or "image/png"
+    image_b64 = base64.b64encode(processed_path.read_bytes()).decode("ascii")
     data_url = f"data:{mime_type};base64,{image_b64}"
 
     prompt = _build_prompt(context)
@@ -62,7 +66,8 @@ def run(image_path: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, 
         return build_tool_result("DiagramExtractor", {}, [], {}, errors)
 
     artifacts = _normalize_artifacts(result.get("data", {}))
-    evidence = _build_evidence(result.get("data", {}), path)
+    artifacts["metadata"] = metadata
+    evidence = _build_evidence(result.get("data", {}), processed_path)
     signals = _signals_from_artifacts(artifacts)
 
     return build_tool_result(
@@ -84,6 +89,43 @@ def _build_prompt(context: Dict[str, Any]) -> str:
         "Also include extracted_text[] if any labels are visible.\n\n"
         f"Context: {context}"
     )
+
+
+def _prepare_image(path: Path) -> Tuple[Path, Dict[str, Any], List[Dict[str, Any]]]:
+    errors: List[Dict[str, Any]] = []
+    metadata = {
+        "original_path": str(path),
+        "original_bytes": path.stat().st_size if path.exists() else 0,
+        "original_suffix": path.suffix.lower(),
+    }
+
+    try:
+        from PIL import Image  # type: ignore
+    except Exception:
+        errors.append({"error": "image_processing_unavailable", "detail": "Pillow not installed"})
+        return path, metadata, errors
+
+    try:
+        with Image.open(path) as img:
+            metadata["original_size"] = img.size
+            width, height = img.size
+            scale = min(1.0, MAX_IMAGE_DIMENSION / max(width, height))
+            if scale < 1.0:
+                new_size = (int(width * scale), int(height * scale))
+                img = img.resize(new_size)
+                metadata["resized"] = True
+                metadata["resized_size"] = new_size
+            else:
+                metadata["resized"] = False
+                metadata["resized_size"] = (width, height)
+
+            output_path = path.with_name(f"{path.stem}_normalized.png")
+            img.convert("RGB").save(output_path, format="PNG")
+            metadata["processed_path"] = str(output_path)
+            return output_path, metadata, errors
+    except Exception as exc:
+        errors.append({"error": "image_processing_failed", "detail": str(exc)})
+        return path, metadata, errors
 
 
 def _normalize_artifacts(data: Dict[str, Any]) -> Dict[str, Any]:
