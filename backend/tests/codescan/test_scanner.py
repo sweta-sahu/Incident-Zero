@@ -376,7 +376,9 @@ class TestFindingFormat:
         required_fields = [
             "finding_id", "vulnerability_type", "severity", "file_path",
             "line_number", "code_snippet", "confidence_score", "evidence",
-            "rule_id", "rule_name", "message", "remediation_hint", "cwe_id"
+            "rule_id", "rule_name", "message", "remediation_hint", "cwe_id",
+            "id", "type", "line", "confidence", "title", "description",
+            "evidence_ids",
         ]
         
         for finding in result["findings"]:
@@ -404,3 +406,40 @@ class TestFindingFormat:
         for finding in result["findings"]:
             confidence = finding["confidence_score"]
             assert 0 <= confidence <= 1, f"Invalid confidence: {confidence}"
+
+    def test_confidence_labels_valid(self, temp_repo, vulnerable_python_code):
+        """Test that confidence labels use low/medium/high scale."""
+        target_file = temp_repo / "src" / "code.py"
+        target_file.write_text(vulnerable_python_code)
+
+        result = scan_repository(str(temp_repo))
+        valid_confidence_labels = {"low", "medium", "high"}
+
+        for finding in result["findings"]:
+            assert finding["confidence"] in valid_confidence_labels
+
+    def test_evidence_artifact_shape(self, temp_repo, vulnerable_python_code):
+        """Test structured evidence artifacts include required fields."""
+        target_file = temp_repo / "src" / "code.py"
+        target_file.write_text(vulnerable_python_code)
+
+        result = scan_repository(str(temp_repo))
+        required_evidence_fields = {
+            "id", "kind", "file_path", "line", "snippet", "context_window", "note"
+        }
+
+        for finding in result["findings"]:
+            assert isinstance(finding["evidence"], list)
+            assert isinstance(finding["evidence_ids"], list)
+            for evidence in finding["evidence"]:
+                assert required_evidence_fields.issubset(evidence.keys())
+                assert evidence["id"] in finding["evidence_ids"]
+
+    def test_tool_result_has_contract_aliases(self, temp_repo, vulnerable_python_code):
+        """Test result includes contract-friendly aliases for downstream consumers."""
+        target_file = temp_repo / "src" / "code.py"
+        target_file.write_text(vulnerable_python_code)
+
+        result = scan_repository(str(temp_repo))
+        assert result["tool"] == "codescan"
+        assert "meta" in result

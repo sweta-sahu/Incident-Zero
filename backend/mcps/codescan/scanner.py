@@ -4,14 +4,13 @@ Orchestrates rule application across repository files.
 """
 
 import os
-import json
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 import logging
 
 from .rules import VULNERABILITY_RULES
-from .evidence_extractor import extract_evidence, build_evidence_summary
+from .evidence_extractor import extract_evidence
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -55,10 +54,16 @@ class ScanResult:
         )
         
         return {
+            "tool": "codescan",
             "tool_name": "CodeScan",
             "timestamp": datetime.now().isoformat() + "Z",
             "status": "completed",
             "findings": self.findings,
+            "meta": {
+                "repo_path": str(self.repo_path),
+                "total_findings": len(self.findings),
+                "scanned_files": self.scanned_files,
+            },
             "metadata": {
                 "repo_path": str(self.repo_path),
                 "scan_duration_seconds": round(duration, 2),
@@ -149,25 +154,36 @@ def scan_repository(repo_path: str) -> Dict[str, Any]:
                     matches = rule.check(content, str(file_path))
                     
                     for match in matches:
+                        confidence_score = match.get("confidence", rule.confidence)
+                        finding_id = f"{rule.rule_id}_{len(result.findings)}"
+
                         # Extract comprehensive evidence
                         evidence_list = extract_evidence(
                             file_path=str(relative_path),
                             line_number=match["line_number"],
-                            content=content
+                            content=content,
+                            finding_id=finding_id,
                         )
                         
                         # Build finding object
                         finding = {
-                            "finding_id": f"{rule.rule_id}_{len(result.findings)}",
+                            "id": finding_id,
+                            "finding_id": finding_id,
+                            "type": rule.vulnerability_type,
                             "vulnerability_type": rule.vulnerability_type,
+                            "title": _get_finding_title(rule.vulnerability_type),
                             "severity": rule.severity,
                             "file_path": str(relative_path),
+                            "line": match["line_number"],
                             "line_number": match["line_number"],
                             "code_snippet": match.get("snippet", ""),
-                            "confidence_score": match.get("confidence", rule.confidence),
+                            "confidence": _to_confidence_label(confidence_score),
+                            "confidence_score": confidence_score,
                             "evidence": evidence_list,
+                            "evidence_ids": [e["id"] for e in evidence_list if "id" in e],
                             "rule_id": rule.rule_id,
                             "rule_name": rule.description,
+                            "description": match.get("message", rule.description),
                             "message": match.get("message", rule.description),
                             "pattern_matched": match.get("pattern_used", ""),
                             "remediation_hint": _get_remediation_hint(rule.vulnerability_type),
@@ -191,6 +207,32 @@ def _get_remediation_hint(vulnerability_type: str) -> str:
         "weak_cryptography": "Use bcrypt, scrypt, or Argon2 for passwords; SHA-256 or stronger for hashing"
     }
     return hints.get(vulnerability_type, "Review findings and apply appropriate security fix")
+
+
+def _get_finding_title(vulnerability_type: str) -> str:
+    """Return a short user-friendly finding title."""
+    titles = {
+        "hardcoded_secret": "Hardcoded secret found",
+        "sql_injection": "Potential SQL injection",
+        "weak_cryptography": "Weak cryptography usage",
+    }
+    return titles.get(vulnerability_type, "Security finding")
+
+
+def _to_confidence_label(score: float) -> str:
+    """
+    Map numeric confidence to contract-aligned confidence labels.
+
+    Thresholds:
+      - high: >= 0.85
+      - medium: >= 0.60
+      - low: < 0.60
+    """
+    if score >= 0.85:
+        return "high"
+    if score >= 0.60:
+        return "medium"
+    return "low"
 
 
 def _get_cwe_id(vulnerability_type: str) -> str:
