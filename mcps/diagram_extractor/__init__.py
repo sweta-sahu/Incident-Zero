@@ -1,1 +1,0 @@
-"""Diagram extractor CLI module."""

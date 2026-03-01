@@ -10,14 +10,14 @@ from pathlib import Path
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from mcps.codescan.scanner import scan_repository, ScanResult
-from mcps.codescan.rules import (
+from backend.mcps.codescan.scanner import scan_repository, ScanResult
+from backend.mcps.codescan.rules import (
     RULE_HARDCODED_SECRETS,
     RULE_SQL_INJECTION,
     RULE_WEAK_CRYPTO,
     VULNERABILITY_RULES
 )
-from mcps.codescan.evidence_extractor import extract_evidence
+from backend.mcps.codescan.evidence_extractor import extract_evidence
 
 
 class TestVulnerabilityRules:
