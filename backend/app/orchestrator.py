@@ -1,6 +1,7 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
-from typing import Any, Dict, List
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 from backend.mcps.codescan.scanner import scan_repository
 from backend.mcps.log_reasoner.run import run as run_log_reasoner
@@ -9,7 +10,7 @@ from backend.mcps.screenshot_analyzer.run import run as run_screenshot_analyzer
 
 from .correlator import correlate_tool_results
 from .graph import build_attack_graph
-from .store import job_store
+from .store import Job, job_store
 
 
 STUB_STAGES: List[Dict[str, str]] = [
@@ -22,107 +23,149 @@ def run_job(job_id: str) -> None:
     if job is None:
         return
 
-    if not job.repo_path:
+    repo_path = str(job.repo_path or "").strip()
+
+    try:
+        if not repo_path:
+            _mark_job_error(job, stage="scan", message="No repo_path provided")
+            return
+
+        if _looks_like_remote_repo(repo_path):
+            _mark_job_error(
+                job,
+                stage="scan",
+                message=(
+                    "repo_path is a remote URL. Provide a local repository path; "
+                    "auto-clone is not supported yet."
+                ),
+            )
+            return
+
+        resolved_repo_path = _resolve_repo_path(repo_path)
+        if resolved_repo_path is None:
+            _mark_job_error(job, stage="scan", message=f"Invalid repo_path syntax: {repo_path}")
+            return
+
+        if not Path(resolved_repo_path).exists():
+            _mark_job_error(
+                job,
+                stage="scan",
+                message=f"Repository path does not exist: {resolved_repo_path}",
+            )
+            return
+
+        tool_result = scan_repository(resolved_repo_path)
+        total_findings = (tool_result.get("meta") or {}).get("total_findings", 0)
         job_store.add_event(
             job,
             stage="scan",
-            message="No repo_path provided",
-            status="error",
+            message=f"CodeScan completed ({total_findings} findings)",
+            status="done",
         )
-        job.status = "error"
+
+        job_store.add_event(
+            job,
+            stage="correlate",
+            message="Correlation started",
+            status="in_progress",
+        )
+
+        tool_results: List[Dict[str, Any]] = [tool_result]
+
+        if job.log_path:
+            log_result = run_log_reasoner(job.log_path, context={"repo_path": resolved_repo_path})
+            tool_results.append(log_result)
+            job_store.add_event(
+                job,
+                stage="correlate",
+                message=_multimodal_event_message(
+                    "Log parser MCP completed", log_result.get("errors")
+                ),
+                status="done",
+            )
+
+        if job.screenshot_path:
+            screenshot_result = run_screenshot_analyzer(
+                job.screenshot_path,
+                context={"repo_path": resolved_repo_path},
+            )
+            tool_results.append(screenshot_result)
+            job_store.add_event(
+                job,
+                stage="correlate",
+                message=_multimodal_event_message(
+                    "Screenshot analyzer MCP completed", screenshot_result.get("errors")
+                ),
+                status="done",
+            )
+
+        correlation = correlate_tool_results(tool_results)
+        job_store.add_event(
+            job,
+            stage="correlate",
+            message="Correlation complete",
+            status="done",
+        )
+
+        graph = build_attack_graph(correlation["findings"])
+        job_store.add_event(
+            job,
+            stage="graph",
+            message="Attack graph built",
+            status="done",
+        )
+
+        patch_result = generate_patches(correlation["findings"], repo_path=resolved_repo_path)
+        patch_count = (patch_result.get("meta") or {}).get("generated_patches", 0)
+        job_store.add_event(
+            job,
+            stage="patch",
+            message=f"Patch generation complete ({patch_count} patches)",
+            status="done",
+        )
+
+        for event in STUB_STAGES:
+            job_store.add_event(job, **event)
+
+        job.status = "done"
         job.result = {
             "job_id": job.job_id,
             "status": job.status,
-            "findings": [],
-            "graph": {"nodes": [], "edges": [], "top_paths": []},
-            "patches": [],
+            "findings": correlation["findings"],
+            "graph": graph,
+            "patches": patch_result.get("patches", []),
             "timeline": job.timeline,
-            "summary": "No repo_path provided; scan skipped.",
+            "summary": correlation["summary"],
         }
-        return
+    except Exception as exc:
+        _mark_job_error(job, stage="finalize", message=f"Pipeline failed: {exc}")
 
-    tool_result = scan_repository(job.repo_path)
-    total_findings = (tool_result.get("meta") or {}).get("total_findings", 0)
-    job_store.add_event(
-        job,
-        stage="scan",
-        message=f"CodeScan completed ({total_findings} findings)",
-        status="done",
-    )
 
-    job_store.add_event(
-        job,
-        stage="correlate",
-        message="Correlation started",
-        status="in_progress",
-    )
+def _resolve_repo_path(repo_path: str) -> Optional[str]:
+    try:
+        return str(Path(repo_path).resolve())
+    except OSError:
+        return None
 
-    tool_results: List[Dict[str, Any]] = [tool_result]
 
-    if job.log_path:
-        log_result = run_log_reasoner(job.log_path, context={"repo_path": job.repo_path})
-        tool_results.append(log_result)
-        job_store.add_event(
-            job,
-            stage="correlate",
-            message=_multimodal_event_message(
-                "Log parser MCP completed", log_result.get("errors")
-            ),
-            status="done",
-        )
+def _looks_like_remote_repo(value: str) -> bool:
+    lower = value.lower()
+    if lower.startswith(("http://", "https://", "ssh://", "git://")):
+        return True
+    return value.startswith("git@")
 
-    if job.screenshot_path:
-        screenshot_result = run_screenshot_analyzer(
-            job.screenshot_path,
-            context={"repo_path": job.repo_path},
-        )
-        tool_results.append(screenshot_result)
-        job_store.add_event(
-            job,
-            stage="correlate",
-            message=_multimodal_event_message(
-                "Screenshot analyzer MCP completed", screenshot_result.get("errors")
-            ),
-            status="done",
-        )
 
-    correlation = correlate_tool_results(tool_results)
-    job_store.add_event(
-        job,
-        stage="correlate",
-        message="Correlation complete",
-        status="done",
-    )
-
-    graph = build_attack_graph(correlation["findings"])
-    job_store.add_event(
-        job,
-        stage="graph",
-        message="Attack graph built",
-        status="done",
-    )
-
-    patch_result = generate_patches(correlation["findings"], repo_path=job.repo_path)
-    patch_count = (patch_result.get("meta") or {}).get("generated_patches", 0)
-    job_store.add_event(
-        job,
-        stage="patch",
-        message=f"Patch generation complete ({patch_count} patches)",
-        status="done",
-    )
-
-    for event in STUB_STAGES:
-        job_store.add_event(job, **event)
-
-    job.status = "done"
+def _mark_job_error(job: Job, stage: str, message: str) -> None:
+    job_store.add_event(job, stage=stage, message=message, status="error")
+    job.status = "error"
     job.result = {
         "job_id": job.job_id,
         "status": job.status,
-        "findings": correlation["findings"],
-        "graph": graph,
-        "patches": patch_result.get("patches", []),
+        "findings": [],
+        "graph": {"nodes": [], "edges": [], "top_paths": []},
+        "patches": [],
         "timeline": job.timeline,
-        "summary": correlation["summary"],
+        "summary": message,
     }
 
 

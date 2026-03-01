@@ -1,7 +1,9 @@
 ﻿import asyncio
 import json
 import mimetypes
+import os
 from pathlib import Path
+from typing import Optional
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,9 +15,9 @@ from .store import job_store
 
 
 class AnalyzeRequest(BaseModel):
-    repo_path: str | None = None
-    log_path: str | None = None
-    screenshot_path: str | None = None
+    repo_path: Optional[str] = None
+    log_path: Optional[str] = None
+    screenshot_path: Optional[str] = None
 
 
 class AnalyzeResponse(BaseModel):
@@ -27,6 +29,20 @@ app = FastAPI(title="Incident Zero API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+cors_allow_origins = os.environ.get(
+    "CORS_ALLOW_ORIGINS",
+    "http://localhost:3000,http://127.0.0.1:3000",
+)
+allowed_origins = [origin.strip() for origin in cors_allow_origins.split(",") if origin.strip()]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -84,9 +100,9 @@ def result(job_id: str) -> dict:
     job = job_store.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
-    if job.status != "done":
-        return {"job_id": job.job_id, "status": job.status, "timeline": job.timeline}
-    return job.result
+    if job.status in {"done", "error"} and job.result:
+        return job.result
+    return {"job_id": job.job_id, "status": job.status, "timeline": job.timeline}
 
 
 @app.get("/evidence/{job_id}/{evidence_id}")
