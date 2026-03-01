@@ -3,14 +3,14 @@
 from typing import Dict, List
 
 from backend.mcps.codescan.scanner import scan_repository
+from backend.mcps.patcher.generator import generate_patches
 
 from .correlator import correlate_tool_results
 from .graph import build_attack_graph
 from .store import job_store
 
 
-STUB_STAGES: List[Dict[str, str]] = [
-    {"stage": "patch", "message": "Patch generation complete (stub)", "status": "done"},
+FINAL_STAGES: List[Dict[str, str]] = [
     {"stage": "finalize", "message": "Result bundle ready", "status": "done"},
 ]
 
@@ -64,7 +64,16 @@ def run_job(job_id: str) -> None:
         status="done",
     )
 
-    for event in STUB_STAGES:
+    patch_result = generate_patches(correlation["findings"], job.repo_path)
+    patch_count = len(patch_result.get("patches", []))
+    job_store.add_event(
+        job,
+        stage="patch",
+        message=f"Patch generation complete ({patch_count} patches)",
+        status="done",
+    )
+
+    for event in FINAL_STAGES:
         job_store.add_event(job, **event)
 
     job.status = "done"
@@ -73,7 +82,9 @@ def run_job(job_id: str) -> None:
         "status": job.status,
         "findings": correlation["findings"],
         "graph": graph,
-        "patches": [],
+        "patches": patch_result.get("patches", []),
+        "patch_meta": patch_result.get("meta", {}),
+        "github_pr": patch_result.get("github", {}),
         "timeline": job.timeline,
         "summary": correlation["summary"],
     }
