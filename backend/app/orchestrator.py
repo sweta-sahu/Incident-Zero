@@ -2,14 +2,15 @@
 
 from typing import Dict, List
 
+from backend.mcps.codescan.scanner import scan_repository
+
+from .correlator import correlate_tool_results
 from .store import job_store
 
 
-STAGES: List[Dict[str, str]] = [
-    {"stage": "scan", "message": "CodeScan completed", "status": "done"},
-    {"stage": "correlate", "message": "Correlation complete", "status": "done"},
-    {"stage": "graph", "message": "Attack graph built", "status": "done"},
-    {"stage": "patch", "message": "Patch generation complete", "status": "done"},
+STUB_STAGES: List[Dict[str, str]] = [
+    {"stage": "graph", "message": "Attack graph built (stub)", "status": "done"},
+    {"stage": "patch", "message": "Patch generation complete (stub)", "status": "done"},
     {"stage": "finalize", "message": "Result bundle ready", "status": "done"},
 ]
 
@@ -19,16 +20,52 @@ def run_job(job_id: str) -> None:
     if job is None:
         return
 
-    for event in STAGES:
+    if not job.repo_path:
+        job_store.add_event(
+            job,
+            stage="scan",
+            message="No repo_path provided",
+            status="error",
+        )
+        job.status = "error"
+        job.result = {
+            "job_id": job.job_id,
+            "status": job.status,
+            "findings": [],
+            "graph": {"nodes": [], "edges": [], "top_paths": []},
+            "patches": [],
+            "timeline": job.timeline,
+            "summary": "No repo_path provided; scan skipped.",
+        }
+        return
+
+    tool_result = scan_repository(job.repo_path)
+    total_findings = (tool_result.get("meta") or {}).get("total_findings", 0)
+    job_store.add_event(
+        job,
+        stage="scan",
+        message=f"CodeScan completed ({total_findings} findings)",
+        status="done",
+    )
+
+    correlation = correlate_tool_results([tool_result])
+    job_store.add_event(
+        job,
+        stage="correlate",
+        message="Correlation complete",
+        status="done",
+    )
+
+    for event in STUB_STAGES:
         job_store.add_event(job, **event)
 
     job.status = "done"
     job.result = {
         "job_id": job.job_id,
         "status": job.status,
-        "findings": [],
+        "findings": correlation["findings"],
         "graph": {"nodes": [], "edges": [], "top_paths": []},
         "patches": [],
         "timeline": job.timeline,
-        "summary": "No findings yet. MCPs not wired in.",
+        "summary": correlation["summary"],
     }

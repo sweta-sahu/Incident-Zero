@@ -1,4 +1,5 @@
 ﻿import asyncio
+import json
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from pydantic import BaseModel
@@ -46,7 +47,7 @@ async def events(job_id: str, request: Request) -> StreamingResponse:
     async def stream():
         try:
             for event in job.timeline:
-                yield f"data: {event}\n\n"
+                yield f"data: {json.dumps(event)}\n\n"
 
             while True:
                 if await request.is_disconnected():
@@ -55,7 +56,7 @@ async def events(job_id: str, request: Request) -> StreamingResponse:
                     event = await asyncio.wait_for(queue.get(), timeout=1.0)
                 except asyncio.TimeoutError:
                     continue
-                yield f"data: {event}\n\n"
+                yield f"data: {json.dumps(event)}\n\n"
         finally:
             job_store.unsubscribe(job_id, queue)
 
