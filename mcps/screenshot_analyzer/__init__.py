@@ -1,0 +1,1 @@
+"""Screenshot analyzer CLI module."""

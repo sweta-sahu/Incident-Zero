@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 from backend.mcps.codescan.scanner import scan_repository
 from backend.mcps.diagram_extractor.run import run as run_diagram_extractor
 from backend.mcps.log_reasoner.run import run as run_log_reasoner
+from backend.mcps.diagram_extractor.run import run as run_diagram_extractor
 from backend.mcps.patcher.generator import generate_patches
 from backend.mcps.screenshot_analyzer.run import run as run_screenshot_analyzer
 
@@ -72,6 +73,7 @@ def run_job(job_id: str) -> None:
         )
 
         tool_results: List[Dict[str, Any]] = [tool_result]
+        diagram_result: Optional[Dict[str, Any]] = None
 
         if job.log_path:
             log_result = run_log_reasoner(job.log_path, context={"repo_path": resolved_repo_path})
@@ -100,7 +102,7 @@ def run_job(job_id: str) -> None:
                 status="done",
             )
 
-        if job.diagram_path:
+        if getattr(job, "diagram_path", None):
             diagram_result = run_diagram_extractor(
                 job.diagram_path,
                 context={"repo_path": resolved_repo_path},
@@ -152,6 +154,7 @@ def run_job(job_id: str) -> None:
             "patches": patch_result.get("patches", []),
             "timeline": job.timeline,
             "summary": correlation["summary"],
+            "diagram": diagram_result,
         }
     except Exception as exc:
         _mark_job_error(job, stage="finalize", message=f"Pipeline failed: {exc}")
