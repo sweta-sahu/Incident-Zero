@@ -30,3 +30,16 @@ def test_run_job_generates_patch_results(temp_repo, vulnerable_python_code):
     patch_events = [e for e in finished_job.timeline if e.get("stage") == "patch"]
     assert patch_events
     assert "stub" not in patch_events[-1].get("message", "").lower()
+
+
+def test_run_job_marks_error_for_remote_repo_url():
+    job = job_store.create_job(repo_path="https://github.com/example/repo")
+    run_job(job.job_id)
+
+    finished_job = job_store.get_job(job.job_id)
+    assert finished_job is not None
+    assert finished_job.status == "error"
+    assert "remote url" in finished_job.result.get("summary", "").lower()
+
+    error_events = [e for e in finished_job.timeline if e.get("status") == "error"]
+    assert error_events
