@@ -231,6 +231,7 @@ def _build_summary(
 
     top_errors = error_blocks[:5]
     top_traces = stack_traces[:3]
+    stack_trace_symbols = _extract_stack_trace_symbols(top_traces)
 
     return {
         "total_messages": total,
@@ -239,6 +240,7 @@ def _build_summary(
         "suspicious_patterns": suspicious_count,
         "top_errors": top_errors,
         "top_stack_traces": top_traces,
+        "stack_trace_symbols": stack_trace_symbols,
     }
 
 
@@ -263,6 +265,23 @@ def _signals_from_llm(data: Dict[str, Any]) -> Dict[str, Any]:
         if "jwt" in lower or "token" in lower:
             signals["auth_issue_suspected"] = True
     return signals
+
+
+def _extract_stack_trace_symbols(stack_traces: List[str]) -> List[str]:
+    symbols: List[str] = []
+    patterns = [
+        r"\bin\s+([A-Za-z_][A-Za-z0-9_\.]*)",
+        r"\bat\s+([A-Za-z_][A-Za-z0-9_\.]*)\s*\(",
+    ]
+    for trace in stack_traces:
+        for line in trace.splitlines():
+            for pattern in patterns:
+                match = re.search(pattern, line)
+                if match:
+                    symbol = match.group(1)
+                    if symbol not in symbols:
+                        symbols.append(symbol)
+    return symbols[:10]
 
 
 def _matches_any(text: str, patterns: Iterable[str]) -> bool:
