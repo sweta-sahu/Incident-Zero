@@ -2,6 +2,7 @@
 import { useRouter } from "next/router";
 
 import MockGraph from "../../components/MockGraph";
+import PatchViewer from "../../components/PatchViewer";
 
 type TimelineEvent = {
   ts: string;
@@ -31,9 +32,24 @@ type Finding = {
   evidence: Evidence[];
 };
 
+type GraphNode = {
+  id: string;
+  label: string;
+  type: string;
+  finding_id?: string;
+};
+
 type Graph = {
-  nodes: { id: string; label: string; type: string }[];
+  nodes: GraphNode[];
   edges: { from: string; to: string; label: string }[];
+};
+
+type Patch = {
+  id: string;
+  finding_id: string;
+  file_path: string;
+  diff: string;
+  summary: string;
 };
 
 const defaultGraph: Graph = { nodes: [], edges: [] };
@@ -46,7 +62,9 @@ export default function Run() {
   const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
   const [findings, setFindings] = useState<Finding[]>([]);
   const [graph, setGraph] = useState<Graph>(defaultGraph);
+  const [patches, setPatches] = useState<Patch[]>([]);
   const [selectedFinding, setSelectedFinding] = useState<Finding | null>(null);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [severityFilter, setSeverityFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
 
@@ -77,6 +95,7 @@ export default function Run() {
         if (resultJson.status === "done") {
           setFindings(resultJson.findings || []);
           setGraph(resultJson.graph || defaultGraph);
+          setPatches(resultJson.patches || []);
         }
       } catch (_) {
         // Ignore result errors in Phase 2
@@ -102,6 +121,35 @@ export default function Run() {
     });
   }, [findings, severityFilter, typeFilter]);
 
+  const summary = useMemo(() => {
+    const counts = { critical: 0, high: 0, medium: 0, low: 0 };
+    findings.forEach((finding) => {
+      const sev = finding.severity as keyof typeof counts;
+      if (counts[sev] !== undefined) {
+        counts[sev] += 1;
+      }
+    });
+    return counts;
+  }, [findings]);
+
+  const handleNodeClick = (node: GraphNode) => {
+    setSelectedNodeId(node.id);
+    if (node.finding_id) {
+      const match = findings.find((finding) => finding.id === node.finding_id);
+      if (match) {
+        setSelectedFinding(match);
+      }
+    }
+  };
+
+  const handleFindingClick = (finding: Finding) => {
+    setSelectedFinding(finding);
+    const node = graph.nodes.find((n) => n.finding_id === finding.id);
+    if (node) {
+      setSelectedNodeId(node.id);
+    }
+  };
+
   return (
     <main className="page">
       <header className="hero compact">
@@ -110,6 +158,31 @@ export default function Run() {
         <p className="subhead">Job ID: {jobId || "loading"}</p>
       </header>
       <section className="cards">
+        <div className="card wide">
+          <h2>Executive Summary</h2>
+          <div className="summary">
+            <div>
+              <strong>{findings.length}</strong>
+              <span>Total findings</span>
+            </div>
+            <div>
+              <strong>{summary.critical}</strong>
+              <span>Critical</span>
+            </div>
+            <div>
+              <strong>{summary.high}</strong>
+              <span>High</span>
+            </div>
+            <div>
+              <strong>{summary.medium}</strong>
+              <span>Medium</span>
+            </div>
+            <div>
+              <strong>{summary.low}</strong>
+              <span>Low</span>
+            </div>
+          </div>
+        </div>
         <div className="card wide">
           <h2>Timeline Stream</h2>
           <p className="muted">
@@ -164,7 +237,7 @@ export default function Run() {
               <article
                 key={finding.id}
                 className="finding"
-                onClick={() => setSelectedFinding(finding)}
+                onClick={() => handleFindingClick(finding)}
               >
                 <header>
                   <span className={`pill ${finding.severity}`}>
@@ -183,7 +256,15 @@ export default function Run() {
         </div>
         <div className="card wide">
           <h2>Graph + Patches</h2>
-          <MockGraph graph={graph} />
+          <MockGraph
+            graph={graph}
+            selectedNodeId={selectedNodeId}
+            onNodeClick={handleNodeClick}
+          />
+          <PatchViewer
+            patches={patches}
+            selectedFindingId={selectedFinding?.id || null}
+          />
         </div>
       </section>
       {selectedFinding && (

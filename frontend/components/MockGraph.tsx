@@ -2,6 +2,7 @@ type Node = {
   id: string;
   label: string;
   type: string;
+  finding_id?: string;
 };
 
 type Edge = {
@@ -17,16 +18,29 @@ type Graph = {
 
 type MockGraphProps = {
   graph: Graph;
+  selectedNodeId?: string | null;
+  onNodeClick?: (node: Node) => void;
 };
 
-export default function MockGraph({ graph }: MockGraphProps) {
+export default function MockGraph({
+  graph,
+  selectedNodeId,
+  onNodeClick,
+}: MockGraphProps) {
   return (
     <div className="graph">
       <div className="graph-nodes">
         {graph.nodes.map((node) => (
-          <div key={node.id} className={`node ${node.type}`}>
+          <button
+            key={node.id}
+            className={`node ${node.type} ${
+              selectedNodeId === node.id ? "selected" : ""
+            }`}
+            type="button"
+            onClick={() => onNodeClick?.(node)}
+          >
             <span>{node.label}</span>
-          </div>
+          </button>
         ))}
       </div>
       <div className="graph-edges muted">

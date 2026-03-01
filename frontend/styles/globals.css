@@ -259,6 +259,8 @@ h1 {
   border-radius: 12px;
   border: 1px solid var(--border);
   background: #12181b;
+  cursor: pointer;
+  font: inherit;
 }
 
 .node.entry {
@@ -271,6 +273,65 @@ h1 {
 
 .node.impact {
   border-color: #ff8c8c;
+}
+
+.node.selected {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 12px;
+}
+
+.summary div {
+  background: #12181b;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  display: grid;
+  gap: 6px;
+}
+
+.summary strong {
+  font-size: 20px;
+}
+
+.summary span {
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.patches {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.patch-card {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  background: #12181b;
+  display: grid;
+  gap: 8px;
+}
+
+.patch-header {
+  display: grid;
+  gap: 4px;
+}
+
+.patch-diff {
+  background: #0e1416;
+  border-radius: 8px;
+  padding: 12px;
+  white-space: pre-wrap;
+  color: var(--text);
+  font-size: 12px;
 }
 
 .form {
