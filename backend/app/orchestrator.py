@@ -10,7 +10,7 @@ from .graph import build_attack_graph
 from .store import job_store
 
 
-FINAL_STAGES: List[Dict[str, str]] = [
+STUB_STAGES: List[Dict[str, str]] = [
     {"stage": "finalize", "message": "Result bundle ready", "status": "done"},
 ]
 
@@ -64,8 +64,8 @@ def run_job(job_id: str) -> None:
         status="done",
     )
 
-    patch_result = generate_patches(correlation["findings"], job.repo_path)
-    patch_count = len(patch_result.get("patches", []))
+    patch_result = generate_patches(correlation["findings"], repo_path=job.repo_path)
+    patch_count = (patch_result.get("meta") or {}).get("generated_patches", 0)
     job_store.add_event(
         job,
         stage="patch",
@@ -73,7 +73,7 @@ def run_job(job_id: str) -> None:
         status="done",
     )
 
-    for event in FINAL_STAGES:
+    for event in STUB_STAGES:
         job_store.add_event(job, **event)
 
     job.status = "done"
@@ -83,8 +83,6 @@ def run_job(job_id: str) -> None:
         "findings": correlation["findings"],
         "graph": graph,
         "patches": patch_result.get("patches", []),
-        "patch_meta": patch_result.get("meta", {}),
-        "github_pr": patch_result.get("github", {}),
         "timeline": job.timeline,
         "summary": correlation["summary"],
     }
