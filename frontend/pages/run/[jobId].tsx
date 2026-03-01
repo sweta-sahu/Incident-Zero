@@ -70,6 +70,8 @@ export default function Run() {
   const apiBase = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
 
   const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
+  const [jobStatus, setJobStatus] = useState("running");
+  const [jobSummary, setJobSummary] = useState("");
   const [findings, setFindings] = useState<Finding[]>([]);
   const [graph, setGraph] = useState<Graph>(defaultGraph);
   const [patches, setPatches] = useState<Patch[]>([]);
@@ -80,11 +82,14 @@ export default function Run() {
 
   useEffect(() => {
     if (!jobId) return;
+    if (jobStatus === "done" || jobStatus === "error") return;
+
     const interval = setInterval(async () => {
       try {
         const statusResp = await fetch(`${apiBase}/status/${jobId}`);
         if (statusResp.ok) {
           const statusJson = await statusResp.json();
+          setJobStatus(statusJson.status || "running");
           setTimeline(statusJson.timeline || []);
         }
       } catch (_) {
@@ -93,26 +98,34 @@ export default function Run() {
     }, 1500);
 
     return () => clearInterval(interval);
-  }, [apiBase, jobId]);
+  }, [apiBase, jobId, jobStatus]);
 
   useEffect(() => {
     if (!jobId) return;
+    if (jobStatus !== "done" && jobStatus !== "error") return;
+
     const fetchResult = async () => {
       try {
         const resultResp = await fetch(`${apiBase}/result/${jobId}`);
         if (!resultResp.ok) return;
         const resultJson = await resultResp.json();
+        setJobStatus(resultJson.status || "running");
+        setJobSummary(resultJson.summary || "");
         if (resultJson.status === "done") {
           setFindings(resultJson.findings || []);
           setGraph(resultJson.graph || defaultGraph);
           setPatches(resultJson.patches || []);
+        } else {
+          setFindings([]);
+          setGraph(defaultGraph);
+          setPatches([]);
         }
       } catch (_) {
         // Ignore result errors in Phase 2
       }
     };
     fetchResult();
-  }, [apiBase, jobId]);
+  }, [apiBase, jobId, jobStatus]);
 
   const types = useMemo(() => {
     const unique = new Set(findings.map((f) => f.type));
@@ -190,6 +203,10 @@ export default function Run() {
         <p className="eyebrow">Investigation</p>
         <h1>Run Status</h1>
         <p className="subhead">Job ID: {jobId || "loading"}</p>
+        <p className="muted">Status: {jobStatus}</p>
+        {jobStatus === "error" && (
+          <p className="muted">Job failed: {jobSummary || "Check timeline for details."}</p>
+        )}
       </header>
       <section className="cards">
         <div className="card wide">
@@ -220,7 +237,7 @@ export default function Run() {
         <div className="card wide">
           <h2>Timeline Stream</h2>
           <p className="muted">
-            Polling /status/{"{jobId}"} for updates (SSE ready).
+            Polling /status/{"{jobId}"} for updates until done/error (SSE ready).
           </p>
           <ul className="timeline">
             {timeline.map((event) => (
