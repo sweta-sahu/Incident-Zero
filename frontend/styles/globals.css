@@ -114,6 +114,33 @@ h1 {
   line-height: 1.5;
 }
 
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.filters {
+  display: flex;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.filters label {
+  display: grid;
+  gap: 6px;
+}
+
+.filters select {
+  background: #0e1416;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 6px 10px;
+  color: var(--text);
+}
+
 .muted {
   color: var(--muted);
 }
@@ -262,6 +289,40 @@ h1 {
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 10px 12px;
+  color: var(--text);
+}
+
+.drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: min(420px, 100%);
+  height: 100vh;
+  background: #12181b;
+  border-left: 1px solid var(--border);
+  padding: 24px;
+  display: grid;
+  gap: 16px;
+  overflow: auto;
+}
+
+.drawer-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.evidence {
+  display: grid;
+  gap: 12px;
+}
+
+.evidence-item pre {
+  background: #0e1416;
+  padding: 12px;
+  border-radius: 8px;
+  white-space: pre-wrap;
   color: var(--text);
 }
 

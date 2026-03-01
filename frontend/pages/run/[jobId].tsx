@@ -1,6 +1,4 @@
-﻿import fs from "fs";
-import path from "path";
-
+﻿import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
 
 import MockGraph from "../../components/MockGraph";
@@ -12,6 +10,15 @@ type TimelineEvent = {
   status: string;
 };
 
+type Evidence = {
+  id: string;
+  kind: string;
+  file_path: string;
+  line: number;
+  snippet: string;
+  note: string;
+};
+
 type Finding = {
   id: string;
   type: string;
@@ -21,21 +28,79 @@ type Finding = {
   description: string;
   file_path: string;
   line: number;
-  evidence: string[];
+  evidence: Evidence[];
 };
 
-type RunProps = {
-  timeline: TimelineEvent[];
-  findings: Finding[];
-  graph: {
-    nodes: { id: string; label: string; type: string }[];
-    edges: { from: string; to: string; label: string }[];
-  };
+type Graph = {
+  nodes: { id: string; label: string; type: string }[];
+  edges: { from: string; to: string; label: string }[];
 };
 
-export default function Run({ timeline, findings, graph }: RunProps) {
+const defaultGraph: Graph = { nodes: [], edges: [] };
+
+export default function Run() {
   const { query } = useRouter();
   const jobId = Array.isArray(query.jobId) ? query.jobId[0] : query.jobId;
+  const apiBase = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
+
+  const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
+  const [findings, setFindings] = useState<Finding[]>([]);
+  const [graph, setGraph] = useState<Graph>(defaultGraph);
+  const [selectedFinding, setSelectedFinding] = useState<Finding | null>(null);
+  const [severityFilter, setSeverityFilter] = useState("all");
+  const [typeFilter, setTypeFilter] = useState("all");
+
+  useEffect(() => {
+    if (!jobId) return;
+    const interval = setInterval(async () => {
+      try {
+        const statusResp = await fetch(`${apiBase}/status/${jobId}`);
+        if (statusResp.ok) {
+          const statusJson = await statusResp.json();
+          setTimeline(statusJson.timeline || []);
+        }
+      } catch (_) {
+        // Ignore polling errors in Phase 2
+      }
+    }, 1500);
+
+    return () => clearInterval(interval);
+  }, [apiBase, jobId]);
+
+  useEffect(() => {
+    if (!jobId) return;
+    const fetchResult = async () => {
+      try {
+        const resultResp = await fetch(`${apiBase}/result/${jobId}`);
+        if (!resultResp.ok) return;
+        const resultJson = await resultResp.json();
+        if (resultJson.status === "done") {
+          setFindings(resultJson.findings || []);
+          setGraph(resultJson.graph || defaultGraph);
+        }
+      } catch (_) {
+        // Ignore result errors in Phase 2
+      }
+    };
+    fetchResult();
+  }, [apiBase, jobId]);
+
+  const types = useMemo(() => {
+    const unique = new Set(findings.map((f) => f.type));
+    return ["all", ...Array.from(unique)];
+  }, [findings]);
+
+  const filteredFindings = useMemo(() => {
+    return findings.filter((finding) => {
+      if (severityFilter !== "all" && finding.severity !== severityFilter) {
+        return false;
+      }
+      if (typeFilter !== "all" && finding.type !== typeFilter) {
+        return false;
+      }
+      return true;
+    });
+  }, [findings, severityFilter, typeFilter]);
 
   return (
     <main className="page">
@@ -48,8 +113,7 @@ export default function Run({ timeline, findings, graph }: RunProps) {
         <div className="card wide">
           <h2>Timeline Stream</h2>
           <p className="muted">
-            Connect to /events/{"{jobId}"} for live updates. Showing mock data
-            for now.
+            Polling /status/{"{jobId}"} for updates (SSE ready).
           </p>
           <ul className="timeline">
             {timeline.map((event) => (
@@ -64,10 +128,44 @@ export default function Run({ timeline, findings, graph }: RunProps) {
           </ul>
         </div>
         <div className="card wide">
-          <h2>Findings</h2>
+          <div className="card-header">
+            <h2>Findings</h2>
+            <div className="filters">
+              <label>
+                Severity
+                <select
+                  value={severityFilter}
+                  onChange={(e) => setSeverityFilter(e.target.value)}
+                >
+                  <option value="all">All</option>
+                  <option value="critical">Critical</option>
+                  <option value="high">High</option>
+                  <option value="medium">Medium</option>
+                  <option value="low">Low</option>
+                </select>
+              </label>
+              <label>
+                Type
+                <select
+                  value={typeFilter}
+                  onChange={(e) => setTypeFilter(e.target.value)}
+                >
+                  {types.map((type) => (
+                    <option key={type} value={type}>
+                      {type}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          </div>
           <div className="findings">
-            {findings.map((finding) => (
-              <article key={finding.id} className="finding">
+            {filteredFindings.map((finding) => (
+              <article
+                key={finding.id}
+                className="finding"
+                onClick={() => setSelectedFinding(finding)}
+              >
                 <header>
                   <span className={`pill ${finding.severity}`}>
                     {finding.severity}
@@ -88,26 +186,42 @@ export default function Run({ timeline, findings, graph }: RunProps) {
           <MockGraph graph={graph} />
         </div>
       </section>
+      {selectedFinding && (
+        <aside className="drawer">
+          <div className="drawer-header">
+            <div>
+              <span className={`pill ${selectedFinding.severity}`}>
+                {selectedFinding.severity}
+              </span>
+              <h3>{selectedFinding.title}</h3>
+            </div>
+            <button
+              className="secondary"
+              onClick={() => setSelectedFinding(null)}
+            >
+              Close
+            </button>
+          </div>
+          <p className="muted">{selectedFinding.description}</p>
+          <p className="meta">
+            {selectedFinding.file_path}:{selectedFinding.line} •{" "}
+            {selectedFinding.type}
+          </p>
+          <div className="evidence">
+            {selectedFinding.evidence?.length ? (
+              selectedFinding.evidence.map((ev) => (
+                <div key={ev.id} className="evidence-item">
+                  <strong>{ev.kind}</strong>
+                  <p className="muted">{ev.note}</p>
+                  <pre>{ev.snippet}</pre>
+                </div>
+              ))
+            ) : (
+              <p className="muted">No evidence snippets available.</p>
+            )}
+          </div>
+        </aside>
+      )}
     </main>
   );
-}
-
-export async function getServerSideProps() {
-  const root = process.cwd().replace(/frontend$/, "");
-  const statusPath = path.join(root, "fixtures", "mockStatus.json");
-  const resultPath = path.join(root, "fixtures", "mockResult.json");
-
-  const statusRaw = fs.readFileSync(statusPath, "utf-8");
-  const resultRaw = fs.readFileSync(resultPath, "utf-8");
-
-  const statusJson = JSON.parse(statusRaw);
-  const resultJson = JSON.parse(resultRaw);
-
-  return {
-    props: {
-      timeline: statusJson.timeline || [],
-      findings: resultJson.findings || [],
-      graph: resultJson.graph || { nodes: [], edges: [] },
-    },
-  };
 }
