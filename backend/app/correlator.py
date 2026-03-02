@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 
@@ -41,6 +42,7 @@ def correlate_tool_results(tool_results: Iterable[Dict[str, Any]]) -> Dict[str, 
 
     findings = list(merged.values())
     _attach_multimodal_payloads(findings, multimodal_payloads)
+    _merge_synthesized_multimodal_findings(findings, multimodal_payloads)
 
     findings.sort(key=lambda f: (-_SEVERITY_ORDER.get(f.get("severity", "low"), 0)))
     return {
@@ -64,8 +66,14 @@ def _normalize_finding(finding: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         severity = _bump_severity(severity)
         signals["runtime_proof"] = True
 
+    file_path = finding.get("file_path") or ""
+    line = int(finding.get("line") or finding.get("line_number") or 0)
+    finding_id = str(finding.get("id") or finding.get("finding_id") or "").strip()
+    if not finding_id:
+        finding_id = _build_stable_finding_id(normalized_type, file_path, line)
+
     return {
-        "id": finding.get("id") or finding.get("finding_id") or "",
+        "id": finding_id,
         "type": normalized_type,
         "title": finding.get("title") or "Security finding",
         "severity": severity,
@@ -73,8 +81,9 @@ def _normalize_finding(finding: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "description": finding.get("description") or finding.get("message") or "",
         "evidence": evidence_list,
         "signals": signals,
-        "file_path": finding.get("file_path") or "",
-        "line": int(finding.get("line") or finding.get("line_number") or 0),
+        "file_path": file_path,
+        "line": line,
+        "source": _normalize_source_list(finding.get("source")) or ["code"],
     }
 
 
@@ -106,8 +115,9 @@ def _normalize_multimodal_payload(result: Dict[str, Any]) -> Optional[Dict[str, 
 
     looks_like_log = _looks_like_log_payload(tool_name, signals, evidence)
     looks_like_screenshot = _looks_like_screenshot_payload(tool_name, signals, artifacts, evidence)
+    looks_like_diagram = _looks_like_diagram_payload(tool_name, signals, artifacts)
 
-    if not looks_like_log and not looks_like_screenshot:
+    if not looks_like_log and not looks_like_screenshot and not looks_like_diagram:
         return None
 
     return {
@@ -117,6 +127,7 @@ def _normalize_multimodal_payload(result: Dict[str, Any]) -> Optional[Dict[str, 
         "artifacts": artifacts,
         "is_log": looks_like_log,
         "is_screenshot": looks_like_screenshot,
+        "is_diagram": looks_like_diagram,
     }
 
 
@@ -131,6 +142,8 @@ def _attach_multimodal_payloads(
             _attach_log_payload(findings, payload)
         if payload.get("is_screenshot"):
             _attach_screenshot_payload(findings, payload)
+        if payload.get("is_diagram"):
+            _attach_diagram_payload(findings, payload)
 
 
 def _attach_log_payload(findings: List[Dict[str, Any]], payload: Dict[str, Any]) -> None:
@@ -141,7 +154,15 @@ def _attach_log_payload(findings: List[Dict[str, Any]], payload: Dict[str, Any])
     if runtime_proof:
         signals["runtime_proof"] = True
 
-    for finding in findings:
+    preferred_types: List[str] = []
+    if signals.get("sql_injection_suspected") or signals.get("suspicious_log_activity"):
+        preferred_types.append("sql-injection")
+    if signals.get("auth_issue_suspected"):
+        preferred_types.append("hardcoded-secret")
+
+    targets = _select_target_findings(findings, signals, preferred_types)
+    for finding in targets:
+        _attach_sources(finding, ["logs"])
         had_runtime_proof = bool((finding.get("signals") or {}).get("runtime_proof"))
         _attach_signals(finding, signals)
         _attach_evidence(finding, evidence)
@@ -163,19 +184,39 @@ def _attach_screenshot_payload(findings: List[Dict[str, Any]], payload: Dict[str
             signals["secret_exposure_detected"] = True
 
     if has_secret_exposure:
-        targets = [f for f in findings if f.get("type") == "hardcoded-secret"]
+        targets = _select_target_findings(findings, signals, ["hardcoded-secret"])
         if not targets:
             targets = [_pick_highest_severity_finding(findings)]
     else:
         targets = []
 
     for finding in targets:
+        _attach_sources(finding, ["screenshot"])
         _attach_signals(finding, signals)
         _attach_evidence(finding, evidence)
 
 
+def _attach_diagram_payload(findings: List[Dict[str, Any]], payload: Dict[str, Any]) -> None:
+    signals = _normalize_signals(payload.get("signals"))
+    evidence = payload.get("evidence", []) or []
+    if not signals and not evidence:
+        return
+
+    targets = _select_target_findings(findings, signals, [])
+    for finding in targets:
+        _attach_sources(finding, ["diagram"])
+        _attach_signals(finding, signals)
+        _attach_evidence(finding, evidence[:1])
+
+
 def _pick_highest_severity_finding(findings: List[Dict[str, Any]]) -> Dict[str, Any]:
     return max(findings, key=lambda f: _SEVERITY_ORDER.get(f.get("severity", "low"), 0))
+
+
+def _build_stable_finding_id(vuln_type: str, file_path: str, line: int) -> str:
+    safe_path = (file_path or "unknown").replace("\\", "/")
+    safe_path = safe_path.replace("/", "_").replace(".", "_")
+    return f"f_{vuln_type}_{safe_path}_{line if line > 0 else 0}"
 
 
 def _build_log_evidence(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -244,6 +285,11 @@ def _attach_signals(finding: Dict[str, Any], incoming: Dict[str, Any]) -> None:
     finding["signals"] = _merge_signals(current, incoming)
 
 
+def _attach_sources(finding: Dict[str, Any], incoming: List[str]) -> None:
+    current = _normalize_source_list(finding.get("source"))
+    finding["source"] = _merge_source_lists(current, incoming)
+
+
 def _merge_signals(base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[str, Any]:
     merged = dict(base)
     for key, value in overlay.items():
@@ -293,6 +339,7 @@ def _merge_into(target: Dict[str, Any], incoming: Dict[str, Any]) -> None:
 
     _attach_evidence(target, incoming.get("evidence", []))
     _attach_signals(target, incoming.get("signals", {}))
+    _attach_sources(target, _normalize_source_list(incoming.get("source")))
 
 
 def _looks_like_log_payload(
@@ -320,6 +367,186 @@ def _looks_like_screenshot_payload(
     if artifacts.get("possible_secret_exposure"):
         return True
     return any(item.get("kind") in {"ocr", "image_text", "screenshot"} for item in evidence)
+
+
+def _looks_like_diagram_payload(
+    tool_name: str,
+    signals: Dict[str, Any],
+    artifacts: Dict[str, Any],
+) -> bool:
+    if "diagram" in tool_name:
+        return True
+    if signals.get("entry_points") or signals.get("trust_zones") or signals.get("secrets_locations"):
+        return True
+    return bool(artifacts.get("components") or artifacts.get("connections"))
+
+
+def _select_target_findings(
+    findings: List[Dict[str, Any]],
+    signals: Dict[str, Any],
+    preferred_types: List[str],
+) -> List[Dict[str, Any]]:
+    finding_ids = signals.get("finding_ids") or []
+    if isinstance(finding_ids, list) and finding_ids:
+        id_set = {str(item).strip() for item in finding_ids if str(item).strip()}
+        matched = [f for f in findings if str(f.get("id") or "").strip() in id_set]
+        if matched:
+            return matched
+
+    if preferred_types:
+        preferred = [f for f in findings if f.get("type") in preferred_types]
+        if preferred:
+            return preferred
+
+    return findings
+
+
+def _merge_synthesized_multimodal_findings(
+    findings: List[Dict[str, Any]],
+    payloads: List[Dict[str, Any]],
+) -> None:
+    synthesized = _synthesize_findings_from_multimodal(payloads)
+    if not synthesized:
+        return
+
+    index: Dict[Tuple[str, str, int], Dict[str, Any]] = {
+        (f.get("type", ""), f.get("file_path", ""), int(f.get("line", 0))): f for f in findings
+    }
+    for item in synthesized:
+        key = (item.get("type", ""), item.get("file_path", ""), int(item.get("line", 0)))
+        existing = index.get(key)
+        if existing is None:
+            findings.append(item)
+            index[key] = item
+            continue
+        _merge_into(existing, item)
+
+
+def _synthesize_findings_from_multimodal(payloads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    synthesized: List[Dict[str, Any]] = []
+    for payload in payloads:
+        signals = _normalize_signals(payload.get("signals"))
+        evidence = [e for e in payload.get("evidence", []) or [] if e]
+        artifacts = payload.get("artifacts", {}) or {}
+
+        if payload.get("is_screenshot") and (
+            signals.get("secret_exposure_detected") or artifacts.get("possible_secret_exposure")
+        ):
+            file_path, line = _extract_file_line_from_evidence(evidence)
+            synthesized.append(
+                _build_synthetic_finding(
+                    vuln_type="hardcoded-secret",
+                    title="Possible hardcoded/exposed secret from screenshot evidence",
+                    description=_first_non_empty(
+                        artifacts.get("visible_messages", []),
+                        "Screenshot indicates possible secret exposure.",
+                    ),
+                    evidence=evidence[:2],
+                    signals=signals,
+                    file_path=file_path,
+                    line=line,
+                )
+            )
+
+        if payload.get("is_log") and (
+            signals.get("sql_injection_suspected") or signals.get("suspicious_log_activity")
+        ):
+            file_path, line = _extract_file_line_from_evidence(evidence)
+            synthesized.append(
+                _build_synthetic_finding(
+                    vuln_type="sql-injection",
+                    title="Possible SQL injection from runtime log evidence",
+                    description="Log patterns indicate SQL injection-like runtime behavior.",
+                    evidence=evidence[:2],
+                    signals=signals,
+                    file_path=file_path,
+                    line=line,
+                )
+            )
+    return synthesized
+
+
+def _build_synthetic_finding(
+    vuln_type: str,
+    title: str,
+    description: str,
+    evidence: List[Dict[str, Any]],
+    signals: Dict[str, Any],
+    file_path: str,
+    line: int,
+) -> Dict[str, Any]:
+    return {
+        "id": _build_stable_finding_id(vuln_type, file_path, line),
+        "type": vuln_type,
+        "title": title,
+        "severity": "high",
+        "confidence": "medium",
+        "description": description,
+        "evidence": evidence,
+        "signals": dict(signals),
+        "file_path": file_path,
+        "line": line,
+        "source": _infer_synthetic_source(signals),
+    }
+
+
+def _extract_file_line_from_evidence(evidence_list: List[Dict[str, Any]]) -> Tuple[str, int]:
+    pattern = r'File "([^"]+)", line (\d+)'
+    for evidence in evidence_list:
+        snippet = str(evidence.get("snippet") or "")
+        match = re.search(pattern, snippet)
+        if not match:
+            continue
+        file_path = match.group(1).strip()
+        try:
+            line_number = int(match.group(2))
+        except ValueError:
+            line_number = 0
+        return file_path, line_number
+    return "", 0
+
+
+def _first_non_empty(values: Any, fallback: str) -> str:
+    if isinstance(values, list):
+        for value in values:
+            text = str(value).strip()
+            if text:
+                return text
+    return fallback
+
+
+def _normalize_source_list(value: Any) -> List[str]:
+    if isinstance(value, str):
+        cleaned = value.strip().lower()
+        return [cleaned] if cleaned else []
+    if isinstance(value, list):
+        normalized: List[str] = []
+        for item in value:
+            if not isinstance(item, str):
+                continue
+            cleaned = item.strip().lower()
+            if cleaned and cleaned not in normalized:
+                normalized.append(cleaned)
+        return normalized
+    return []
+
+
+def _merge_source_lists(base: List[str], incoming: List[str]) -> List[str]:
+    merged: List[str] = []
+    for item in base + incoming:
+        cleaned = str(item).strip().lower()
+        if cleaned and cleaned not in merged:
+            merged.append(cleaned)
+    return merged
+
+
+def _infer_synthetic_source(signals: Dict[str, Any]) -> List[str]:
+    source = ["runtime"]
+    if signals.get("secret_exposure_detected"):
+        source.append("screenshot")
+    if signals.get("sql_injection_suspected") or signals.get("suspicious_log_activity"):
+        source.append("logs")
+    return _merge_source_lists([], source)
 
 
 def _has_runtime_proof(evidence_list: List[Dict[str, Any]]) -> bool:
