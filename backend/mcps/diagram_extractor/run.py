@@ -1,5 +1,6 @@
-﻿import base64
+import base64
 import mimetypes
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -43,17 +44,7 @@ def run(image_path: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, 
         }
     ]
 
-    schema = {
-        "required": [
-            "components",
-            "data_stores",
-            "connections",
-            "entry_points",
-            "trust_zones",
-            "secrets_locations",
-            "confidence",
-        ]
-    }
+    schema = {"required": ["components", "connections", "trust_zones"]}
 
     result = call_vision(
         model=DEFAULT_VISION_MODEL,
@@ -63,7 +54,6 @@ def run(image_path: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, 
 
     if not result.get("ok"):
         detail = str(result.get("error") or "")
-        # Fallback: tolerate partial JSON and fill defaults in normalization.
         if "schema validation" in detail.lower():
             fallback = call_vision(
                 model=DEFAULT_VISION_MODEL,
@@ -101,12 +91,18 @@ def run(image_path: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, 
 
 def _build_prompt(context: Dict[str, Any]) -> str:
     return (
-        "You are analyzing an architecture diagram image. "
-        "Return strict JSON with: components[] (name, type: api/db/cache/queue/ui), "
-        "data_stores[], connections[] (from, to, protocol), entry_points[], "
-        "trust_zones[] (public/private/internal), secrets_locations[]. "
-        "If unsure, set confidence low. Do not invent components not visible. "
-        "Also include extracted_text[] if any labels are visible.\n\n"
+        "You are an architecture diagram parser. "
+        "Only use what is visible in the image. "
+        "Do NOT use code, logs, or assumptions. "
+        "Return strict JSON with primary fields: "
+        "components[] (id, name, type, zone, confidence), "
+        "connections[] (from, to, protocol, confidence), "
+        "trust_zones[] (name, level, confidence). "
+        "Optional fields: entry_points[], data_stores[], secrets_locations[], extracted_text[], confidence. "
+        "Component type must be one of: api, service, database, cache, storage, external, queue, ui, unknown. "
+        "Trust level must be one of: untrusted, semi_trusted, internal, unknown. "
+        "If unsure, use unknown and confidence=low. "
+        "Do not invent hidden components or links.\n\n"
         f"Context: {context}"
     )
 
@@ -150,29 +146,32 @@ def _prepare_image(path: Path) -> Tuple[Path, Dict[str, Any], List[Dict[str, Any
 
 def _normalize_artifacts(data: Dict[str, Any]) -> Dict[str, Any]:
     components = data.get("components", []) or []
-    normalized = []
+    normalized_components: List[Dict[str, Any]] = []
     for comp in components:
         name = str(comp.get("name", "unknown")).strip()
-        comp_type = str(comp.get("type", "unknown")).strip().lower()
-        norm_name = _normalize_name(name)
+        comp_type = _normalize_component_type(str(comp.get("type", "unknown")).strip().lower())
+        norm_name = _normalize_name(str(comp.get("id") or name))
         prefix = _type_prefix(comp_type)
         comp_id = f"{prefix}:{norm_name}" if norm_name else f"{prefix}:unknown"
-        normalized.append({
-            "id": comp_id,
-            "name": name,
-            "type": comp_type,
-            "confidence": comp.get("confidence", "low"),
-        })
+        normalized_components.append(
+            {
+                "id": comp_id,
+                "name": name,
+                "type": comp_type,
+                "zone": _normalize_zone(str(comp.get("zone") or "").strip().lower()),
+                "confidence": comp.get("confidence", "low"),
+            }
+        )
 
-    data_stores = data.get("data_stores", []) or []
-    connections = data.get("connections", []) or []
+    id_set = {item["id"] for item in normalized_components}
+    name_map = {_normalize_name(item["name"]): item["id"] for item in normalized_components}
 
     return {
-        "components": normalized,
-        "data_stores": data_stores,
-        "connections": connections,
+        "components": normalized_components,
+        "connections": _normalize_connections(data.get("connections", []) or [], id_set, name_map),
+        "trust_zones": _normalize_trust_zones(data.get("trust_zones", []) or []),
         "entry_points": data.get("entry_points", []) or [],
-        "trust_zones": data.get("trust_zones", []) or [],
+        "data_stores": _normalize_data_stores(data.get("data_stores", []) or []),
         "secrets_locations": data.get("secrets_locations", []) or [],
         "confidence": data.get("confidence", "low"),
         "extracted_text": data.get("extracted_text", []) or [],
@@ -207,18 +206,153 @@ def _signals_from_artifacts(artifacts: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _normalize_name(value: str) -> str:
-    return value.strip().lower().replace(" ", "-")
+    cleaned = value.strip().lower()
+    cleaned = re.sub(r"[^a-z0-9]+", "-", cleaned)
+    return cleaned.strip("-")
+
+
+def _normalize_component_type(value: str) -> str:
+    aliases = {
+        "db": "database",
+        "database": "database",
+        "postgres": "database",
+        "postgresql": "database",
+        "mysql": "database",
+        "redis": "cache",
+        "cache": "cache",
+        "s3": "storage",
+        "bucket": "storage",
+        "storage": "storage",
+        "api": "api",
+        "gateway": "api",
+        "service": "service",
+        "external": "external",
+        "queue": "queue",
+        "mq": "queue",
+        "ui": "ui",
+        "frontend": "ui",
+    }
+    if value in {"api", "service", "database", "cache", "storage", "external", "queue", "ui"}:
+        return value
+    return aliases.get(value, "unknown")
+
+
+def _normalize_zone(value: str) -> str:
+    if not value:
+        return "unknown"
+    if "public" in value or "internet" in value:
+        return "public"
+    if "private" in value:
+        return "private"
+    if "internal" in value or "vpc" in value:
+        return "internal"
+    return "unknown"
+
+
+def _normalize_trust_level(value: str) -> str:
+    text = (value or "").strip().lower()
+    if text in {"untrusted", "semi_trusted", "internal", "unknown"}:
+        return text
+    if "internet" in text or "public" in text:
+        return "untrusted"
+    if "semi" in text or "dmz" in text:
+        return "semi_trusted"
+    if "private" in text or "internal" in text or "vpc" in text:
+        return "internal"
+    return "unknown"
+
+
+def _normalize_trust_zones(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    zones: List[Dict[str, Any]] = []
+    seen = set()
+    for item in items:
+        raw_name = str(item.get("name") or "").strip()
+        if not raw_name:
+            continue
+        name = _normalize_name(raw_name)
+        if name in seen:
+            continue
+        seen.add(name)
+        zones.append(
+            {
+                "name": name,
+                "level": _normalize_trust_level(str(item.get("level") or item.get("type") or "")),
+                "confidence": item.get("confidence", "low"),
+            }
+        )
+    return zones
+
+
+def _normalize_connections(
+    items: List[Dict[str, Any]],
+    known_component_ids: set,
+    known_component_names: Dict[str, str],
+) -> List[Dict[str, Any]]:
+    connections: List[Dict[str, Any]] = []
+    seen = set()
+    for item in items:
+        source = _resolve_component_ref(str(item.get("from") or ""), known_component_ids, known_component_names)
+        target = _resolve_component_ref(str(item.get("to") or ""), known_component_ids, known_component_names)
+        if source == "unknown" or target == "unknown":
+            continue
+        key = (source, target)
+        if key in seen:
+            continue
+        seen.add(key)
+        connections.append(
+            {
+                "from": source,
+                "to": target,
+                "protocol": str(item.get("protocol") or "unknown").strip().lower() or "unknown",
+                "confidence": item.get("confidence", "low"),
+            }
+        )
+    return connections
+
+
+def _resolve_component_ref(
+    value: str,
+    known_component_ids: set,
+    known_component_names: Dict[str, str],
+) -> str:
+    raw = value.strip()
+    if not raw:
+        return "unknown"
+    if raw in known_component_ids:
+        return raw
+    name_key = _normalize_name(raw)
+    if name_key in known_component_names:
+        return known_component_names[name_key]
+    return name_key or "unknown"
+
+
+def _normalize_data_stores(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    normalized: List[Dict[str, Any]] = []
+    for item in items:
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        normalized.append(
+            {
+                "name": name,
+                "type": _normalize_component_type(str(item.get("type") or "").strip().lower()),
+                "confidence": item.get("confidence", "low"),
+            }
+        )
+    return normalized
 
 
 def _type_prefix(comp_type: str) -> str:
-    if comp_type in {"db", "database"}:
+    if comp_type in {"database"}:
         return "db"
-    if comp_type in {"api", "service"}:
+    if comp_type in {"api", "service", "external"}:
         return "svc"
-    if comp_type in {"queue", "mq"}:
+    if comp_type in {"queue"}:
         return "queue"
     if comp_type in {"cache"}:
         return "cache"
-    if comp_type in {"ui", "frontend"}:
+    if comp_type in {"ui"}:
         return "ui"
+    if comp_type in {"storage"}:
+        return "storage"
     return "svc"
