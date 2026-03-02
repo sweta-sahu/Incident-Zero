@@ -28,6 +28,7 @@ export default function Upload() {
 
   const [recentRuns, setRecentRuns] = useState<string[]>([]);
   const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
+  const [repoValidationError, setRepoValidationError] = useState("");
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -51,10 +52,17 @@ export default function Upload() {
   };
 
   const handleSubmit = async () => {
+    const selectedRepo = repoMode === "path" ? repoPath.trim() : githubUrl.trim();
+    if (!selectedRepo) {
+      setRepoValidationError("Repository is required.");
+      setStatus("error");
+      return;
+    }
+
+    setRepoValidationError("");
     setStatus("loading");
     try {
       const payload = new FormData();
-      const selectedRepo = repoMode === "path" ? repoPath.trim() : githubUrl.trim();
       payload.append("repo_path", selectedRepo);
 
       if (logMode === "path") {
@@ -118,7 +126,7 @@ export default function Upload() {
           >
             <div className="upload-grid four">
               <label className="upload-card">
-                <span className="upload-card-title">Upload Repository</span>
+                <span className="upload-card-title">Upload Repository *</span>
                 <span className="upload-card-copy">
                   Choose local path or GitHub URL. Local path is required for active scanning.
                 </span>
@@ -126,14 +134,20 @@ export default function Upload() {
                   <button
                     type="button"
                     className={`mode-btn ${repoMode === "path" ? "active" : ""}`}
-                    onClick={() => setRepoMode("path")}
+                    onClick={() => {
+                      setRepoMode("path");
+                      setRepoValidationError("");
+                    }}
                   >
                     Path
                   </button>
                   <button
                     type="button"
                     className={`mode-btn ${repoMode === "github" ? "active" : ""}`}
-                    onClick={() => setRepoMode("github")}
+                    onClick={() => {
+                      setRepoMode("github");
+                      setRepoValidationError("");
+                    }}
                   >
                     GitHub
                   </button>
@@ -144,7 +158,10 @@ export default function Upload() {
                     type="text"
                     placeholder="D:\\projects\\repo or /home/user/repo"
                     value={repoPath}
-                    onChange={(event) => setRepoPath(event.target.value)}
+                    onChange={(event) => {
+                      setRepoPath(event.target.value);
+                      setRepoValidationError("");
+                    }}
                   />
                 ) : (
                   <input
@@ -152,9 +169,13 @@ export default function Upload() {
                     type="text"
                     placeholder="https://github.com/org/repo"
                     value={githubUrl}
-                    onChange={(event) => setGithubUrl(event.target.value)}
+                    onChange={(event) => {
+                      setGithubUrl(event.target.value);
+                      setRepoValidationError("");
+                    }}
                   />
                 )}
+                {repoValidationError && <p className="error-note">{repoValidationError}</p>}
               </label>
 
               <label className="upload-card">
@@ -284,7 +305,14 @@ export default function Upload() {
             </div>
 
             <div className="action-row">
-              <button type="submit" className="action-btn" disabled={status === "loading"}>
+              <button
+                type="submit"
+                className="action-btn"
+                disabled={
+                  status === "loading" ||
+                  !(repoMode === "path" ? repoPath.trim() : githubUrl.trim())
+                }
+              >
                 {status === "loading" ? "Investigating..." : "Investigate System"}
               </button>
               {status === "error" && (

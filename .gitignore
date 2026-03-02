@@ -22,3 +22,4 @@ error_normalized.png
 frontend/pages/run/[jobId].tsx
 frontend/styles/globals.css
 .gitignore
+.venv
