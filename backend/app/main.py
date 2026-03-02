@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from starlette.responses import FileResponse, StreamingResponse
 
 from .orchestrator import run_job
-from .store import job_store
+from .store import Job, job_store
 
 
 class AnalyzeRequest(BaseModel):
@@ -30,14 +30,6 @@ class AnalyzeResponse(BaseModel):
 
 
 app = FastAPI(title="Incident Zero API")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 cors_allow_origins = os.environ.get(
     "CORS_ALLOW_ORIGINS",
     "http://localhost:3000,http://127.0.0.1:3000",
@@ -150,12 +142,37 @@ def result(job_id: str) -> dict:
     job = job_store.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
-    if job.status != "done":
-        return {"job_id": job.job_id, "status": job.status, "timeline": job.timeline}
-    return job.result
     if job.status in {"done", "error"} and job.result:
         return job.result
     return {"job_id": job.job_id, "status": job.status, "timeline": job.timeline}
+
+
+@app.get("/inputs/{job_id}")
+def inputs(job_id: str) -> dict:
+    job = job_store.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    return {
+        "job_id": job.job_id,
+        "repo_path": job.repo_path,
+        "log_path": job.log_path,
+        "screenshot_path": job.screenshot_path,
+        "diagram_path": job.diagram_path,
+    }
+
+
+@app.get("/input-file/{job_id}/{kind}")
+def input_file(job_id: str, kind: str) -> FileResponse:
+    job = job_store.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+
+    path = _resolve_job_input_path(job, kind=kind)
+    if path is None:
+        raise HTTPException(status_code=404, detail="input file not found")
+
+    media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    return FileResponse(path=path, media_type=media_type, filename=path.name)
 
 
 @app.get("/evidence/{job_id}/{evidence_id}")
@@ -209,3 +226,19 @@ def _persist_upload(upload: UploadFile, prefix: str) -> str:
         shutil.copyfileobj(upload.file, handle)
 
     return str(saved_path)
+
+
+def _resolve_job_input_path(job: Job, kind: str) -> Optional[Path]:
+    kind_map = {
+        "log": str(getattr(job, "log_path", "") or "").strip(),
+        "screenshot": str(getattr(job, "screenshot_path", "") or "").strip(),
+        "diagram": str(getattr(job, "diagram_path", "") or "").strip(),
+    }
+    selected = kind_map.get(kind)
+    if not selected:
+        return None
+
+    path = Path(selected)
+    if not path.exists() or not path.is_file():
+        return None
+    return path

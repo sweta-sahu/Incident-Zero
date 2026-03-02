@@ -8,3 +8,4 @@ backend/mcps/common/__pycache__/
 backend/mcps/log_reasoner/__pycache__/
 backend/mcps/patcher/__pycache__/
 backend/mcps/screenshot_analyzer/__pycache__/
+.venv

@@ -1,13 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
 
-type TimelineEvent = {
-  ts: string;
-  stage: string;
-  message: string;
-  status: string;
-};
-
 type Evidence = {
   id: string;
   kind: string;
@@ -30,31 +23,6 @@ type Finding = {
   signals?: Record<string, unknown>;
 };
 
-type GraphNode = {
-  id: string;
-  label: string;
-  type: string;
-  finding_id?: string;
-};
-
-type GraphEdge = {
-  from: string;
-  to: string;
-  label: string;
-};
-
-type GraphPath = {
-  id: string;
-  node_ids: string[];
-  score: number;
-};
-
-type Graph = {
-  nodes: GraphNode[];
-  edges: GraphEdge[];
-  top_paths: GraphPath[];
-};
-
 type Patch = {
   id: string;
   finding_id: string;
@@ -63,16 +31,13 @@ type Patch = {
   summary: string;
 };
 
-type StageStatus = "pending" | "in_progress" | "done" | "error";
-
-const STAGE_ORDER: { stage: string; label: string }[] = [
-  { stage: "ingest", label: "Repo Ingested" },
-  { stage: "scan", label: "CodeScan MCP Complete" },
-  { stage: "correlate", label: "Correlating Findings" },
-  { stage: "graph", label: "Building Attack Graph" },
-  { stage: "patch", label: "Generating Patches" },
-  { stage: "finalize", label: "Finalizing Report" },
-];
+type InputBundle = {
+  job_id: string;
+  repo_path?: string | null;
+  log_path?: string | null;
+  screenshot_path?: string | null;
+  diagram_path?: string | null;
+};
 
 const SEVERITY_RANK: Record<string, number> = {
   critical: 4,
@@ -80,8 +45,6 @@ const SEVERITY_RANK: Record<string, number> = {
   medium: 2,
   low: 1,
 };
-
-const defaultGraph: Graph = { nodes: [], edges: [], top_paths: [] };
 
 function hasRuntimeProof(finding: Finding): boolean {
   if (Boolean(finding.signals?.runtime_proof)) {
@@ -112,66 +75,118 @@ function diffLineType(line: string): "add" | "remove" | "meta" | "context" {
 export default function Run() {
   const { query } = useRouter();
   const jobId = Array.isArray(query.jobId) ? query.jobId[0] : query.jobId;
+  const safeJobId = typeof jobId === "string" ? jobId : "";
   const apiBase = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
 
-  const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
   const [jobStatus, setJobStatus] = useState("running");
   const [jobSummary, setJobSummary] = useState("");
   const [findings, setFindings] = useState<Finding[]>([]);
-  const [graph, setGraph] = useState<Graph>(defaultGraph);
   const [patches, setPatches] = useState<Patch[]>([]);
+  const [diagramTextBlocks, setDiagramTextBlocks] = useState<string[]>([]);
+
   const [selectedFindingId, setSelectedFindingId] = useState<string | null>(null);
   const [severityFilter, setSeverityFilter] = useState("all");
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
 
+  const [uploadedInputs, setUploadedInputs] = useState<InputBundle | null>(null);
+  const [uploadedLog, setUploadedLog] = useState("");
+  const [logLoadState, setLogLoadState] = useState<"idle" | "loading" | "ready" | "error">(
+    "idle"
+  );
+  const [screenshotPreviewError, setScreenshotPreviewError] = useState(false);
+  const [diagramPreviewError, setDiagramPreviewError] = useState(false);
+
   useEffect(() => {
-    if (!jobId) return;
+    if (!safeJobId) return;
     if (jobStatus === "done" || jobStatus === "error") return;
 
     const interval = setInterval(async () => {
       try {
-        const statusResp = await fetch(`${apiBase}/status/${jobId}`);
+        const statusResp = await fetch(`${apiBase}/status/${safeJobId}`);
         if (!statusResp.ok) return;
         const statusJson = await statusResp.json();
         setJobStatus(statusJson.status || "running");
-        setTimeline(statusJson.timeline || []);
       } catch (_) {
         // Ignore transient polling errors.
       }
     }, 1500);
 
     return () => clearInterval(interval);
-  }, [apiBase, jobId, jobStatus]);
+  }, [apiBase, safeJobId, jobStatus]);
 
   useEffect(() => {
-    if (!jobId) return;
+    if (!safeJobId) return;
     if (jobStatus !== "done" && jobStatus !== "error") return;
 
     const fetchResult = async () => {
       try {
-        const resultResp = await fetch(`${apiBase}/result/${jobId}`);
+        const resultResp = await fetch(`${apiBase}/result/${safeJobId}`);
         if (!resultResp.ok) return;
         const resultJson = await resultResp.json();
         setJobStatus(resultJson.status || "running");
         setJobSummary(resultJson.summary || "");
-        setTimeline(resultJson.timeline || []);
 
         if (resultJson.status === "done") {
-          setFindings(resultJson.findings || []);
-          setGraph(resultJson.graph || defaultGraph);
+          const nextFindings = resultJson.findings || [];
+          setFindings(nextFindings);
           setPatches(resultJson.patches || []);
+          const extractedText = resultJson?.diagram?.artifacts?.extracted_text;
+          setDiagramTextBlocks(Array.isArray(extractedText) ? extractedText : []);
+          if (nextFindings.length > 0) {
+            setSelectedFindingId((prev) => prev || nextFindings[0].id);
+          }
           return;
         }
+
         setFindings([]);
-        setGraph(defaultGraph);
         setPatches([]);
+        setDiagramTextBlocks([]);
       } catch (_) {
         // Ignore result errors.
       }
     };
 
     fetchResult();
-  }, [apiBase, jobId, jobStatus]);
+  }, [apiBase, safeJobId, jobStatus]);
+
+  useEffect(() => {
+    if (!safeJobId) return;
+
+    const fetchInputs = async () => {
+      try {
+        const inputsResp = await fetch(`${apiBase}/inputs/${safeJobId}`);
+        if (!inputsResp.ok) return;
+        const inputsJson = await inputsResp.json();
+        setUploadedInputs(inputsJson);
+        setScreenshotPreviewError(false);
+        setDiagramPreviewError(false);
+
+        const hasLogPath = Boolean(String(inputsJson.log_path || "").trim());
+        if (!hasLogPath) {
+          setUploadedLog("");
+          setLogLoadState("idle");
+          return;
+        }
+
+        setLogLoadState("loading");
+        const logResp = await fetch(
+          `${apiBase}/input-file/${encodeURIComponent(safeJobId)}/log`
+        );
+        if (!logResp.ok) {
+          setUploadedLog("");
+          setLogLoadState("error");
+          return;
+        }
+        const text = await logResp.text();
+        setUploadedLog(text);
+        setLogLoadState("ready");
+      } catch (_) {
+        setLogLoadState("error");
+      }
+    };
+
+    fetchInputs();
+  }, [apiBase, safeJobId]);
 
   useEffect(() => {
     if (!findings.length) {
@@ -241,90 +256,7 @@ export default function Run() {
     );
   }, [selectedFinding]);
 
-  const screenshotEvidence = useMemo(() => {
-    if (!selectedFinding) return null;
-    return (
-      selectedFinding.evidence.find((evidence) => evidence.kind === "screenshot") || null
-    );
-  }, [selectedFinding]);
-
-  const progressItems = useMemo(() => {
-    const stateByStage: Record<string, StageStatus> = {};
-    STAGE_ORDER.forEach((item) => {
-      stateByStage[item.stage] = "pending";
-    });
-
-    timeline.forEach((event) => {
-      if (!(event.stage in stateByStage)) return;
-      if (event.status === "error") {
-        stateByStage[event.stage] = "error";
-        return;
-      }
-      if (event.status === "done") {
-        stateByStage[event.stage] = "done";
-        return;
-      }
-      if (stateByStage[event.stage] === "pending") {
-        stateByStage[event.stage] = "in_progress";
-      }
-    });
-
-    return STAGE_ORDER.map((item) => ({
-      ...item,
-      status: stateByStage[item.stage],
-    }));
-  }, [timeline]);
-
-  const riskScore = useMemo(() => {
-    if (!findings.length) return 0;
-    const weighted =
-      summary.critical * 10 + summary.high * 8 + summary.medium * 5 + summary.low * 2;
-    return Number((weighted / findings.length).toFixed(1));
-  }, [findings.length, summary.critical, summary.high, summary.low, summary.medium]);
-
-  const safeJobId = typeof jobId === "string" ? jobId : "";
   const runtimeVerified = Boolean(selectedFinding && hasRuntimeProof(selectedFinding));
-
-  const attackPathNodes = useMemo(() => {
-    const nodeById: Record<string, GraphNode> = {};
-    graph.nodes.forEach((node) => {
-      nodeById[node.id] = node;
-    });
-
-    if (graph.top_paths.length) {
-      const selectedVulnNodeId = selectedFinding ? `vuln_${selectedFinding.id}` : "";
-      const bestPath =
-        graph.top_paths.find((path) => path.node_ids.includes(selectedVulnNodeId)) ||
-        graph.top_paths[0];
-
-      const nodes = (bestPath?.node_ids || [])
-        .map((nodeId) => nodeById[nodeId])
-        .filter((node): node is GraphNode => Boolean(node));
-      if (nodes.length) return nodes;
-    }
-
-    const entry = graph.nodes.find((node) => node.type === "entry");
-    const vuln =
-      (selectedFinding && graph.nodes.find((node) => node.finding_id === selectedFinding.id)) ||
-      graph.nodes.find((node) => node.type === "vuln");
-    const impact = graph.nodes.find((node) => node.type === "impact");
-    const fallback = [entry, vuln, impact].filter((node): node is GraphNode => Boolean(node));
-    if (fallback.length) return fallback;
-
-    if (selectedFinding) {
-      return [
-        { id: "entry_fallback", label: "Internet", type: "entry" },
-        {
-          id: `vuln_${selectedFinding.id}`,
-          label: titleFromType(selectedFinding.type),
-          type: "vuln",
-          finding_id: selectedFinding.id,
-        },
-        { id: "impact_fallback", label: "User Database", type: "impact" },
-      ];
-    }
-    return [];
-  }, [graph, selectedFinding]);
 
   const handleCopyDiff = async () => {
     if (!selectedPatch?.diff) return;
@@ -338,6 +270,13 @@ export default function Run() {
     }
   };
 
+  const screenshotUrl = safeJobId
+    ? `${apiBase}/input-file/${encodeURIComponent(safeJobId)}/screenshot`
+    : "";
+  const diagramUrl = safeJobId
+    ? `${apiBase}/input-file/${encodeURIComponent(safeJobId)}/diagram`
+    : "";
+
   return (
     <main className="workbench-page">
       <section className="panel-shell analysis-shell">
@@ -350,19 +289,30 @@ export default function Run() {
           <span className={`status-chip ${jobStatus}`}>{jobStatus}</span>
         </header>
 
-        <div className="analysis-columns">
-          <article className="panel-block progress-block">
-            <h2>Progress</h2>
-            <ul className="progress-list">
-              {progressItems.map((item) => (
-                <li key={item.stage} className={`progress-item ${item.status}`}>
-                  <span className={`progress-dot ${item.status}`} />
-                  <span>{item.label}</span>
-                </li>
-              ))}
-            </ul>
-          </article>
+        <div className="summary-strip">
+          <div className="summary-tile">
+            <span className="muted">Total Findings</span>
+            <strong>{findings.length}</strong>
+          </div>
+          <div className="summary-tile critical">
+            <span className="muted">Critical</span>
+            <strong>{summary.critical}</strong>
+          </div>
+          <div className="summary-tile high">
+            <span className="muted">High</span>
+            <strong>{summary.high}</strong>
+          </div>
+          <div className="summary-tile medium">
+            <span className="muted">Medium</span>
+            <strong>{summary.medium}</strong>
+          </div>
+          <div className="summary-tile low">
+            <span className="muted">Low</span>
+            <strong>{summary.low}</strong>
+          </div>
+        </div>
 
+        <div className="analysis-columns no-progress">
           <article className="panel-block findings-block">
             <div className="findings-head">
               <h2>Findings</h2>
@@ -406,6 +356,51 @@ export default function Run() {
                 <p className="muted">No findings yet. Waiting for pipeline output.</p>
               )}
             </div>
+          </article>
+
+          <article className="panel-block context-block">
+            <h2>Finding Context</h2>
+            {selectedFinding ? (
+              <div className="context-content">
+                <div className="context-metrics">
+                  <div className="metric-card compact">
+                    <span className="muted">Severity</span>
+                    <strong className={selectedFinding.severity}>{selectedFinding.severity}</strong>
+                  </div>
+                  <div className="metric-card compact">
+                    <span className="muted">Confidence</span>
+                    <strong>{selectedFinding.confidence || "-"}</strong>
+                  </div>
+                  <div className="metric-card compact">
+                    <span className="muted">Runtime Verified</span>
+                    <strong className={runtimeVerified ? "high" : ""}>
+                      {runtimeVerified ? "Yes" : "No"}
+                    </strong>
+                  </div>
+                  <div className="metric-card compact">
+                    <span className="muted">Location</span>
+                    <strong>{selectedFinding.file_path}:{selectedFinding.line}</strong>
+                  </div>
+                </div>
+
+                <div className="context-section">
+                  <h3>Exploit Story</h3>
+                  <p>{selectedFinding.description || "No narrative available yet."}</p>
+                </div>
+
+                <div className="context-section">
+                  <h3>Code Evidence</h3>
+                  <pre>{codeEvidence?.snippet || "No code evidence attached."}</pre>
+                </div>
+
+                <div className="context-section">
+                  <h3>Runtime Evidence</h3>
+                  <pre>{logEvidence?.snippet || "No runtime log evidence attached."}</pre>
+                </div>
+              </div>
+            ) : (
+              <p className="muted">Select a finding to view severity, confidence, and evidence.</p>
+            )}
           </article>
 
           <article className="panel-block patch-block">
@@ -453,158 +448,84 @@ export default function Run() {
               </div>
             </div>
 
-            <div className="patch-cta-row">
-              <button type="button" className="action-btn patch-cta" disabled={!selectedPatch}>
-                Create Pull Request
-              </button>
-            </div>
           </article>
         </div>
       </section>
 
-      <div className="two-panel-grid">
-        <section className="panel-shell detail-shell">
-          <header className="panel-header">
-            <div className="panel-brand">
-              <span className="brand-mark">IZ</span>
-              <strong>
-                Details:{" "}
-                {selectedFinding
-                  ? `${titleFromType(selectedFinding.type)} in ${selectedFinding.file_path}`
-                  : "Waiting for finding selection"}
-              </strong>
-            </div>
-            <span className="status-chip neutral">Progress</span>
-          </header>
-
-          <div className="detail-layout">
-            <aside className="detail-metrics">
-              <div className="metric-card">
-                <span className="muted">Severity</span>
-                <strong className={selectedFinding?.severity || ""}>
-                  {selectedFinding?.severity || "-"}
-                </strong>
-              </div>
-              <div className="metric-card">
-                <span className="muted">Confidence</span>
-                <strong>{selectedFinding?.confidence || "-"}</strong>
-              </div>
-              <div className="metric-card">
-                <span className="muted">Runtime Verified</span>
-                <strong className={runtimeVerified ? "high" : ""}>
-                  {runtimeVerified ? "Yes" : "No"}
-                </strong>
-              </div>
-            </aside>
-
-            <div className="detail-story">
-              <h3>Exploit Story</h3>
-              <p>{selectedFinding?.description || "No narrative available yet."}</p>
-              <h3>Suggested Fix</h3>
-              <p>
-                {selectedPatchList[0]?.summary ||
-                  "No patch generated yet. Continue investigation to derive remediation."}
-              </p>
-            </div>
+      <section className="panel-shell uploads-shell">
+        <header className="panel-header">
+          <div className="panel-brand">
+            <span className="brand-mark">IZ</span>
+            <strong>Uploaded Artifacts</strong>
+            <span className="muted">{safeJobId || "pending job"}</span>
           </div>
+          <span className="status-chip neutral">Evidence</span>
+        </header>
 
-          <div className="evidence-board">
-            <h3>Evidence</h3>
-            <div className="evidence-entry">
-              <strong>Code Snippet</strong>
-              <pre>{codeEvidence?.snippet || "No code evidence attached."}</pre>
-            </div>
-            <div className="evidence-entry">
-              <strong>Log Entry</strong>
-              <pre>{logEvidence?.snippet || "No runtime log evidence attached."}</pre>
-            </div>
-            <div className="evidence-entry">
-              <strong>Screenshot</strong>
-              {screenshotEvidence && safeJobId ? (
-                <div className="screenshot-frame">
-                  <img
-                    src={`${apiBase}/evidence/${encodeURIComponent(
-                      safeJobId
-                    )}/${encodeURIComponent(screenshotEvidence.id)}`}
-                    alt="Screenshot evidence"
-                  />
-                  <p>{screenshotEvidence.note || screenshotEvidence.file_path}</p>
-                </div>
-              ) : (
-                <p className="muted">No screenshot evidence attached.</p>
-              )}
-            </div>
-          </div>
-        </section>
-
-        <section className="panel-shell report-shell">
-          <header className="panel-header">
-            <div className="panel-brand">
-              <span className="brand-mark">IZ</span>
-              <strong>Incident Zero Report</strong>
-              <span className="muted">{safeJobId || "pending job"}</span>
-            </div>
-            <span className="status-chip neutral">Report</span>
-          </header>
-
-          <div className="report-layout">
-            <div className="summary-card">
-              <h2>Executive Summary</h2>
-              <ul className="summary-list">
-                <li>{findings.length} findings detected</li>
-                <li>
-                  {summary.critical > 0 ? "Critical attack path identified" : "No critical path yet"}
-                </li>
-                <li>{patches.length > 0 ? "Patch generated" : "Patch pending"}</li>
-              </ul>
-              <p className="top-risk">
-                Top Risk:{" "}
-                {selectedFinding
-                  ? `${titleFromType(selectedFinding.type)} in ${selectedFinding.file_path}`
-                  : "No confirmed risk."}
-              </p>
-              <p className="risk-score">
-                Overall Risk Score: <strong>{riskScore.toFixed(1)}</strong> / 10
-              </p>
-              {jobStatus === "error" && <p className="error-note">Job failed: {jobSummary}</p>}
-            </div>
-
-            <div className="map-card">
-              <div className="attack-graph-board">
-                <div className="attack-graph-stack">
-                  {attackPathNodes.length ? (
-                    attackPathNodes.map((node, index) => (
-                      <div key={node.id} className="attack-node-wrap">
-                        <div className={`attack-node-card ${node.type}`}>{node.label}</div>
-                        {index < attackPathNodes.length - 1 && (
-                          <div className="attack-connector" aria-hidden="true" />
-                        )}
-                      </div>
-                    ))
-                  ) : (
-                    <p className="muted">Attack graph unavailable.</p>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="patch-summary-card">
-            <h2>Patch Summary</h2>
-            {selectedPatchList.length ? (
-              <ul>
-                {selectedPatchList.map((patch) => (
-                  <li key={patch.id}>
-                    <strong>{patch.file_path}</strong>: {patch.summary}
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="muted">No patch generated for the selected finding yet.</p>
+        <div className="uploads-grid">
+          <article className="panel-block upload-evidence-panel">
+            <h2>Uploaded Logs</h2>
+            <p className="upload-path">{uploadedInputs?.log_path || "No log input attached."}</p>
+            {logLoadState === "loading" && <p className="muted">Loading log file...</p>}
+            {logLoadState === "error" && (
+              <p className="muted">Unable to read uploaded log file from current path.</p>
             )}
+            {logLoadState !== "loading" && logLoadState !== "error" && (
+              <pre className="upload-log-view">{uploadedLog || "No log content available."}</pre>
+            )}
+          </article>
+
+          <article className="panel-block upload-evidence-panel">
+            <h2>Uploaded Screenshot</h2>
+            <p className="upload-path">
+              {uploadedInputs?.screenshot_path || "No screenshot input attached."}
+            </p>
+            {uploadedInputs?.screenshot_path && !screenshotPreviewError ? (
+              <img
+                className="upload-image-preview"
+                src={screenshotUrl}
+                alt="Uploaded screenshot"
+                onError={() => setScreenshotPreviewError(true)}
+              />
+            ) : (
+              <p className="muted">Screenshot preview unavailable.</p>
+            )}
+          </article>
+
+          <article className="panel-block upload-evidence-panel">
+            <h2>Uploaded Diagram</h2>
+            <p className="upload-path">
+              {uploadedInputs?.diagram_path || "No diagram input attached."}
+            </p>
+            {uploadedInputs?.diagram_path && !diagramPreviewError ? (
+              <img
+                className="upload-image-preview"
+                src={diagramUrl}
+                alt="Uploaded diagram"
+                onError={() => setDiagramPreviewError(true)}
+              />
+            ) : (
+              <p className="muted">Diagram preview unavailable.</p>
+            )}
+
+            {diagramTextBlocks.length > 0 && (
+              <div className="diagram-text-block">
+                <strong>Extracted Diagram Text</strong>
+                <pre>{diagramTextBlocks.join("\n")}</pre>
+              </div>
+            )}
+          </article>
+        </div>
+      </section>
+
+      {jobStatus === "error" && (
+        <section className="panel-shell">
+          <div className="summary-card">
+            <h2>Pipeline Error</h2>
+            <p className="error-note">{jobSummary || "Unknown error while processing the job."}</p>
           </div>
         </section>
-      </div>
+      )}
     </main>
   );
 }
